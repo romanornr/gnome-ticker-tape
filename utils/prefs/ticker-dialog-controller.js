@@ -1,5 +1,9 @@
-import Adw from 'gi://Adw';
-import Gtk from 'gi://Gtk';
+/*
+ * This preferences-process module maps dialog state and provider-backed validation into saved ticker configs.
+ * Shell actors stay outside this directory so prefs and GNOME Shell keep separate toolkit dependency graphs.
+ */
+import Adw from 'gi://Adw?version=1';
+import Gtk from 'gi://Gtk?version=4.0';
 import Pango from 'gi://Pango';
 import Soup from 'gi://Soup?version=3.0';
 
@@ -28,9 +32,7 @@ const MAX_CURATED_SUGGESTIONS = 8;
 
 /*
  * TickerDialogController owns mutable dialog state, catalog search, non-crypto verification, and save wiring.
- * prefs.js retains page layout and row actions; this module exposes presentTickerDialog as its entrypoint.
- * Dialog state leaves as a saved ticker config through buildTickerConfig().
- * Provider wire formats and runtime refresh stay with services/providers and QuotesService.
+ * It owns the catalog and verification request lifecycle while prefs.js retains page layout and row actions.
  */
 class TickerDialogController {
     constructor({
@@ -57,7 +59,7 @@ class TickerDialogController {
         this.activeAssetCategory = initialTicker.assetCategory ?? assetCategoryOptions[0].value;
         this.activeMarketSessionId = getTickerMarketSessionPolicy({...initialTicker, assetCategory: this.activeAssetCategory}).marketSessionId;
         this.activeCryptoProvider = this.activeAssetCategory === 'crypto'
-            ? (initialTicker.cryptoProvider ?? getDefaultCryptoProvider())
+            ? initialTicker.cryptoProvider ?? getDefaultCryptoProvider()
             : '';
         this.marketSessionOptions = getTickerMarketSessionOptions({...initialTicker, assetCategory: this.activeAssetCategory});
         this.cryptoCatalog = null;
@@ -65,7 +67,6 @@ class TickerDialogController {
         this.cryptoCatalogError = '';
         this.cryptoCatalogLoading = false;
         this.cryptoCatalogRequestId = 0;
-        this.isDialogDestroyed = false;
         this.autoFilledCryptoLabel = initialTicker.label ?? '';
         this.verifyInProgress = false;
         this.lastVerifiedSymbol = '';
@@ -85,23 +86,44 @@ class TickerDialogController {
             void this._ensureCryptoCatalogLoaded();
         this._renderCuratedSuggestions();
         this._updateSaveSensitivity();
-        this.dialog.present();
+        this.dialog.present(this.window);
     }
 
+    /* This composition boundary builds the Adw hierarchy before _connectSignals() wires state transitions. */
     _buildUi() {
-        this.dialog = new Gtk.Dialog({transient_for: this.window, modal: true, use_header_bar: true, title: this.title});
-        this.dialog.add_button('Cancel', Gtk.ResponseType.CANCEL);
-        this.saveButton = this.dialog.add_button('Save', Gtk.ResponseType.OK);
+        this.dialog = new Adw.Dialog({title: this.title});
+        this.dialog.set_content_width(680);
+        this.dialog.set_content_height(680);
+
+        const toolbarView = new Adw.ToolbarView();
+        const headerBar = new Adw.HeaderBar({
+            show_end_title_buttons: false,
+            show_start_title_buttons: false,
+        });
+        toolbarView.add_top_bar(headerBar);
+
+        this.cancelButton = new Gtk.Button({label: 'Cancel'});
+        headerBar.pack_start(this.cancelButton);
+
+        this.saveButton = new Gtk.Button({label: 'Save'});
         this.saveButton.add_css_class('suggested-action');
+        headerBar.pack_end(this.saveButton);
 
-        const contentArea = this.dialog.get_content_area();
-        contentArea.set_margin_top(12);
-        contentArea.set_margin_bottom(12);
-        contentArea.set_margin_start(12);
-        contentArea.set_margin_end(12);
-
-        const content = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 12});
-        contentArea.append(content);
+        const content = new Gtk.Box({
+            margin_bottom: 18,
+            margin_end: 18,
+            margin_start: 18,
+            margin_top: 18,
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 12,
+        });
+        const scrolledWindow = new Gtk.ScrolledWindow({
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+        });
+        scrolledWindow.set_child(content);
+        toolbarView.set_content(scrolledWindow);
+        this.dialog.set_child(toolbarView);
 
         const formGroup = new Adw.PreferencesGroup();
         content.append(formGroup);
@@ -140,8 +162,8 @@ class TickerDialogController {
         const symbolField = this._createReadOnlyTextRow(
             'Symbol',
             this.activeAssetCategory === 'crypto'
-                ? (this.initialTicker.liveSymbol ?? this.initialTicker.symbol ?? '')
-                : (this.initialTicker.symbol ?? '')
+                ? this.initialTicker.liveSymbol ?? this.initialTicker.symbol ?? ''
+                : this.initialTicker.symbol ?? ''
         );
         this.symbolRow = symbolField.row;
         this.symbolValueLabel = symbolField.valueLabel;
@@ -203,7 +225,7 @@ class TickerDialogController {
                 symbol: this._getSymbolText(),
             }).defaultMarketSessionId;
             this.activeCryptoProvider = this.activeAssetCategory === 'crypto'
-                ? (this.activeCryptoProvider || getDefaultCryptoProvider())
+                ? this.activeCryptoProvider || getDefaultCryptoProvider()
                 : '';
             this._resetCryptoCatalogState();
             if (this.activeAssetCategory === 'crypto') {
@@ -249,17 +271,21 @@ class TickerDialogController {
             this._renderCuratedSuggestions();
         });
 
-        this.dialog.connect('destroy', () => {
-            this.isDialogDestroyed = true;
-            this.verificationRequestId += 1;
-            this.verificationSession.abort();
+        this.cancelButton.connect('clicked', () => {
+            this.dialog.close();
         });
 
-        this.dialog.connect('response', (_dialog, responseId) => {
-            if (responseId === Gtk.ResponseType.OK)
-                this.onSave(this._buildNextTicker());
+        this.saveButton.connect('clicked', () => {
+            this.onSave(this._buildNextTicker());
+            this.dialog.close();
+        });
 
-            this.dialog.destroy();
+        this.dialog.connect('closed', () => {
+            this.dialog = null;
+            this.cryptoCatalogRequestId += 1;
+            this.verificationRequestId += 1;
+            this.verifyInProgress = false;
+            this.verificationSession.abort();
         });
     }
 
@@ -267,13 +293,13 @@ class TickerDialogController {
     _applyCuratedTicker(curatedTicker) {
         this._setLabelText(curatedTicker.label);
         this._setSymbolText(curatedTicker.assetCategory === 'crypto'
-            ? (curatedTicker.liveSymbol ?? curatedTicker.symbol)
+            ? curatedTicker.liveSymbol ?? curatedTicker.symbol
             : curatedTicker.symbol);
         this.decimalsRow.value = curatedTicker.priceDecimals;
         this.activeAssetCategory = curatedTicker.assetCategory;
         this.activeMarketSessionId = getTickerMarketSessionPolicy(curatedTicker).marketSessionId;
         this.activeCryptoProvider = curatedTicker.assetCategory === 'crypto'
-            ? (curatedTicker.cryptoProvider ?? getDefaultCryptoProvider())
+            ? curatedTicker.cryptoProvider ?? getDefaultCryptoProvider()
             : '';
         this.assetCategoryRow.selected = this.findOptionIndex(this.assetCategoryOptions, curatedTicker.assetCategory);
         this.cryptoProviderRow.selected = this.findOptionIndex(this.cryptoProviderOptions, this.activeCryptoProvider);
@@ -439,18 +465,17 @@ class TickerDialogController {
             this.cryptoCatalogProvider = '';
             this.cryptoCatalogError = error.message;
         } finally {
-            if (this._isStaleCryptoCatalogResponse(requestId, requestedCryptoProvider))
-                return;
-
-            this.cryptoCatalogLoading = false;
-            this._renderCuratedSuggestions();
-            this._updateSaveSensitivity();
+            if (!this._isStaleCryptoCatalogResponse(requestId, requestedCryptoProvider)) {
+                this.cryptoCatalogLoading = false;
+                this._renderCuratedSuggestions();
+                this._updateSaveSensitivity();
+            }
         }
     }
 
-    /* Async catalog responses are discarded when the dialog was destroyed or the provider changed mid-flight. */
+    /* Async catalog responses are discarded when the dialog closed or the provider changed mid-flight. */
     _isStaleCryptoCatalogResponse(requestId, requestedCryptoProvider) {
-        return this.isDialogDestroyed ||
+        return this.dialog === null ||
             requestId !== this.cryptoCatalogRequestId ||
             this.activeCryptoProvider !== requestedCryptoProvider;
     }

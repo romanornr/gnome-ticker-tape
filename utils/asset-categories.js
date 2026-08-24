@@ -155,9 +155,8 @@ export function isLiveCryptoTicker(ticker, cryptoProvider = null) {
         ticker?.assetCategory !== ASSET_CATEGORIES.CRYPTO ||
         typeof ticker.liveSymbol !== 'string' ||
         ticker.liveSymbol === ''
-    ) {
+    )
         return false;
-    }
 
     return cryptoProvider === null ||
         (ticker.cryptoProvider ?? getDefaultCryptoProvider()) === cryptoProvider;

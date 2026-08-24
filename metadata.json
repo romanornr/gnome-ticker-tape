@@ -5,9 +5,7 @@
   "settings-schema": "org.gnome.shell.extensions.ticker-tape",
   "shell-version": [
     "49",
-    "49.5",
     "50"
   ],
-  "version": 1,
   "url": "https://github.com/romanornr/gnome-ticker-tape"
 }

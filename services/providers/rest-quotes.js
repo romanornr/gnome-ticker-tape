@@ -7,7 +7,8 @@ import {mapSymbolToCnbc, parseFxPairSymbol} from './cnbc-symbols.js';
 
 /*
  * Runtime and prefs share this CNBC-first chain with narrow Nasdaq/FX fallbacks.
- * Complete CNBC passes make no fallback requests; prefs runs the same chain quietly.
+ * Complete CNBC passes make no fallback requests. Runtime health reporting stays
+ * at QuotesService, where one complete provider outcome can be assessed as a whole.
  */
 export async function refresh(tickers, context) {
     let quotesBySymbol = new Map();
@@ -27,9 +28,7 @@ export async function refresh(tickers, context) {
         return quotesBySymbol;
     }
 
-    const recoveredCount = await runFallbacks(missingTickers, context, quotesBySymbol);
-    if (!context?.quiet)
-        logRestWarning(`CNBC missed ${missingTickers.length} symbol(s); fallbacks recovered ${recoveredCount}.`);
+    await runFallbacks(missingTickers, context, quotesBySymbol);
 
     if (quotesBySymbol.size === 0 && cnbcError)
         throw cnbcError;
@@ -55,7 +54,7 @@ export async function verifySymbol(session, symbol, assetCategory = null) {
     if (!isDerivedDxySymbol(normalizedSymbol) && !parseFxPairSymbol(normalizedSymbol) && !mapSymbolToCnbc(normalizedSymbol))
         throw new Error(`Could not verify ${symbol}. The symbol format is not supported.`);
 
-    const quotesBySymbol = await refresh([{symbol: normalizedSymbol, assetCategory}], {session, quiet: true});
+    const quotesBySymbol = await refresh([{symbol: normalizedSymbol, assetCategory}], {session});
     const quote = quotesBySymbol.get(normalizedSymbol.toUpperCase());
     if (!quote)
         throw new Error(`Could not verify ${symbol}. No quote data was returned by CNBC.`);
@@ -69,35 +68,17 @@ export async function verifySymbol(session, symbol, assetCategory = null) {
 /* Both providers receive every miss and enforce their own ownership without duplicating eligibility policy here. */
 async function runFallbacks(missingTickers, context, quotesBySymbol) {
     /* The two fallbacks hit unrelated hosts, so a slow one must not delay the other. */
-    const recoveredCounts = await Promise.all([
-        mergeFallbackQuotes('Nasdaq', () => refreshNasdaqQuotes(missingTickers, context), quotesBySymbol, context?.quiet),
-        mergeFallbackQuotes('FX rate table', () => refreshFallbackFxQuotes(missingTickers, context), quotesBySymbol, context?.quiet),
+    await Promise.all([
+        mergeFallbackQuotes(() => refreshNasdaqQuotes(missingTickers, context), quotesBySymbol),
+        mergeFallbackQuotes(() => refreshFallbackFxQuotes(missingTickers, context), quotesBySymbol),
     ]);
-
-    return recoveredCounts.reduce((total, count) => total + count, 0);
 }
 
-async function mergeFallbackQuotes(fallbackName, refreshFallback, quotesBySymbol, quiet) {
+async function mergeFallbackQuotes(refreshFallback, quotesBySymbol) {
     try {
         const fallbackQuotes = await refreshFallback();
         fallbackQuotes.forEach((quote, storeKey) => quotesBySymbol.set(storeKey, quote));
-        return fallbackQuotes.size;
-    } catch (error) {
-        if (!quiet) logRestError(error, `${fallbackName} fallback refresh failed`);
-        return 0;
+    } catch {
+        /* The aggregate miss count is reported once by QuotesService. */
     }
-}
-
-/* Tests run outside GNOME Shell's logging globals, so logging stays optional at the provider boundary. */
-function logRestWarning(message) {
-    if (typeof log === 'function')
-        log(`Ticker Tape: ${message}`);
-}
-
-/* Swallowed fallback failures never reach QuotesService, so the stack trace has to be logged here or it is lost. */
-function logRestError(error, message) {
-    if (typeof logError === 'function')
-        logError(error, `Ticker Tape: ${message}`);
-    else
-        logRestWarning(`${message}: ${error.message}`);
 }

@@ -2,10 +2,8 @@ import {
     createDisplayEntry,
     createErrorEntry,
     createLoadingEntry,
-    DEFAULT_TEXT_COLOR,
     NEGATIVE_COLOR,
     POSITIVE_COLOR,
-    STALE_TEXT_COLOR,
 } from '../utils/format.js';
 
 /*
@@ -31,11 +29,11 @@ export function buildEntries(tickers, quoteStore, displaySettings, previousEntri
     return decorateEntriesWithPriceFlash(baseEntries, previousEntries);
 }
 
-/* After the temporary flash window expires, entries return to the neutral text color. */
+/* After the temporary flash window expires, entries return to the theme's inherited text color. */
 export function clearPriceFlash(entries) {
     return entries.map(entry => ({
         ...entry,
-        priceColor: entry.isStale ? STALE_TEXT_COLOR : DEFAULT_TEXT_COLOR,
+        priceColor: null,
         priceFlash: false,
     }));
 }
@@ -51,13 +49,13 @@ function decorateEntriesWithPriceFlash(entries, previousEntries) {
         const previousPrice = previousEntry?.displayPrice;
 
         if (
+            entry.isStale ||
             !previousEntry ||
             !Number.isFinite(previousPrice) ||
             !Number.isFinite(entry.displayPrice) ||
             previousEntry.priceText === entry.priceText
-        ) {
+        )
             return entry;
-        }
 
         return {
             ...entry,

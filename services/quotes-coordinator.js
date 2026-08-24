@@ -16,9 +16,9 @@ export class QuotesCoordinator {
     /* The coordinator is created with callbacks so QuotesService can supply policy without re-owning timers. */
     constructor({
         onRefresh,
-        onReconnectLiveProviders,
-        onRebuildEntries,
-        onResetPriceFlash,
+        onReconnectLiveProviders = () => {},
+        onRebuildEntries = () => {},
+        onResetPriceFlash = () => {},
         networkMonitor = Gio.NetworkMonitor.get_default(),
     }) {
         this._onRefresh = onRefresh;
@@ -27,8 +27,8 @@ export class QuotesCoordinator {
         this._onResetPriceFlash = onResetPriceFlash;
         this._networkMonitor = networkMonitor;
         this._networkMonitorSignalId = 0;
+        this._lifecycleGeneration = 0;
         this._networkAvailable = false;
-        this._active = false;
         this._refreshTimeoutId = 0;
         this._refreshInProgress = false;
         this._refreshQueued = null;
@@ -39,12 +39,13 @@ export class QuotesCoordinator {
         this._entriesUpdateInProgress = false;
         this._entriesUpdateQueued = false;
         this._lastEntriesUpdateUsec = 0;
+        this._entryRebuildFailureReported = false;
         this._priceFlashTimeoutId = 0;
     }
 
     /* stop() is the single timer cleanup point for the entire timing subsystem. */
     stop() {
-        this._active = false;
+        this._lifecycleGeneration += 1;
         this._refreshTimeoutId = removeTimeout(this._refreshTimeoutId);
         this._restRetryTimeoutId = removeTimeout(this._restRetryTimeoutId);
         this._entriesUpdateTimeoutId = removeTimeout(this._entriesUpdateTimeoutId);
@@ -58,6 +59,7 @@ export class QuotesCoordinator {
         this._entriesUpdateInProgress = false;
         this._entriesUpdateQueued = false;
         this._lastEntriesUpdateUsec = 0;
+        this._entryRebuildFailureReported = false;
     }
 
     /*
@@ -65,9 +67,9 @@ export class QuotesCoordinator {
      * This is also what activates the coordinator: refresh requests and network recovery no-op until it runs.
      */
     scheduleRefreshTimer(refreshIntervalSeconds) {
-        this._active = true;
         this._refreshIntervalSeconds = refreshIntervalSeconds;
         if (this._networkMonitorSignalId === 0) {
+            this._lifecycleGeneration += 1;
             this._networkAvailable = this._networkMonitor.get_network_available();
             this._networkMonitorSignalId = this._networkMonitor.connect(
                 'network-changed',
@@ -87,7 +89,7 @@ export class QuotesCoordinator {
 
     /* Refresh requests share the entry-update single-flight shape; a queued forced pass wins on merge. */
     requestRefresh(forced = false) {
-        if (!this._active)
+        if (this._networkMonitorSignalId === 0)
             return;
 
         if (this._refreshInProgress) {
@@ -100,6 +102,9 @@ export class QuotesCoordinator {
 
     /* Live updates may arrive faster than the panel should redraw, so rebuild requests are coalesced here. */
     requestEntriesUpdate(immediate = false) {
+        if (this._networkMonitorSignalId === 0)
+            return;
+
         if (this._entriesUpdateInProgress) {
             this._entriesUpdateQueued = true;
             return;
@@ -145,7 +150,7 @@ export class QuotesCoordinator {
             PRICE_FLASH_DURATION_MS,
             () => {
                 this._priceFlashTimeoutId = 0;
-                this._onResetPriceFlash?.(clearPriceFlash(entries));
+                this._onResetPriceFlash(clearPriceFlash(entries));
                 return GLib.SOURCE_REMOVE;
             }
         );
@@ -156,19 +161,27 @@ export class QuotesCoordinator {
         if (this._entriesUpdateInProgress)
             return;
 
+        const lifecycleGeneration = this._lifecycleGeneration;
         this._entriesUpdateInProgress = true;
 
         try {
-            await this._onRebuildEntries?.();
-            this._lastEntriesUpdateUsec = GLib.get_monotonic_time();
+            await this._onRebuildEntries();
+            if (this._isCurrentLifecycle(lifecycleGeneration))
+                this._entryRebuildFailureReported = false;
+        } catch (error) {
+            if (this._isCurrentLifecycle(lifecycleGeneration) && !this._entryRebuildFailureReported) {
+                this._entryRebuildFailureReported = true;
+                logError(error, 'Ticker Tape: entry rebuild failed');
+            }
         } finally {
-            this._entriesUpdateInProgress = false;
-
-            if (!this._entriesUpdateQueued)
-                return;
-
-            this._entriesUpdateQueued = false;
-            this.requestEntriesUpdate(false);
+            if (this._isCurrentLifecycle(lifecycleGeneration)) {
+                this._entriesUpdateInProgress = false;
+                this._lastEntriesUpdateUsec = GLib.get_monotonic_time();
+                const shouldRunQueuedUpdate = this._entriesUpdateQueued;
+                this._entriesUpdateQueued = false;
+                if (shouldRunQueuedUpdate)
+                    this.requestEntriesUpdate(false);
+            }
         }
     }
 
@@ -176,21 +189,24 @@ export class QuotesCoordinator {
         if (this._refreshInProgress)
             return;
 
+        const lifecycleGeneration = this._lifecycleGeneration;
         this._refreshInProgress = true;
 
         try {
-            const directRestOutcome = await this._onRefresh?.(forced);
-            if (this._active && directRestOutcome === true)
+            const directRestOutcome = await this._onRefresh(forced);
+            if (this._isCurrentLifecycle(lifecycleGeneration) && directRestOutcome === true)
                 this._resetRestRetry();
-            else if (this._active && directRestOutcome === false)
+            else if (this._isCurrentLifecycle(lifecycleGeneration) && directRestOutcome === false)
                 this._scheduleRestRetry();
         } catch (error) {
-            logError(error, 'Ticker Tape: refresh pass failed');
+            if (this._isCurrentLifecycle(lifecycleGeneration))
+                logError(error, 'Ticker Tape: refresh pass failed');
         } finally {
-            this._refreshInProgress = false;
+            if (this._isCurrentLifecycle(lifecycleGeneration))
+                this._refreshInProgress = false;
         }
 
-        if (!this._active || this._refreshQueued === null)
+        if (!this._isCurrentLifecycle(lifecycleGeneration) || this._refreshQueued === null)
             return;
 
         const queuedForced = this._refreshQueued;
@@ -198,9 +214,14 @@ export class QuotesCoordinator {
         this.requestRefresh(queuedForced);
     }
 
+    /* Async completions may mutate timing state only within the lifecycle that started them. */
+    _isCurrentLifecycle(generation) {
+        return this._networkMonitorSignalId !== 0 && this._lifecycleGeneration === generation;
+    }
+
     /* Only a rejected direct REST poll advances the bounded fast-retry ladder. */
     _scheduleRestRetry() {
-        if (!this._active || this._restRetryTimeoutId !== 0)
+        if (this._networkMonitorSignalId === 0 || this._restRetryTimeoutId !== 0)
             return;
 
         const delaySeconds = REST_RETRY_INITIAL_SECONDS * 2 ** this._restRetryAttempt;
@@ -232,11 +253,11 @@ export class QuotesCoordinator {
     _handleNetworkChanged(available) {
         const restored = available && !this._networkAvailable;
         this._networkAvailable = available;
-        if (!this._active || !restored)
+        if (this._networkMonitorSignalId === 0 || !restored)
             return;
 
         this._resetRestRetry();
-        this._onReconnectLiveProviders?.();
+        this._onReconnectLiveProviders();
         this.requestRefresh(true);
     }
 }

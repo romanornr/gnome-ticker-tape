@@ -6,6 +6,10 @@ UUID="ticker-tape@romanornr"
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_DIR="${HOME}/.local/share/gnome-shell/extensions/${UUID}"
 
+if [[ -L "${TARGET_DIR}" ]]; then
+    rm -f "${TARGET_DIR}"
+fi
+
 mkdir -p "${TARGET_DIR}"
 rm -rf "${TARGET_DIR}/ui" "${TARGET_DIR}/services" "${TARGET_DIR}/utils" "${TARGET_DIR}/schemas"
 cp "${SOURCE_DIR}/metadata.json" "${SOURCE_DIR}/extension.js" "${SOURCE_DIR}/prefs.js" "${TARGET_DIR}/"
@@ -19,10 +23,15 @@ if gnome-extensions info "${UUID}" >/dev/null 2>&1 && gnome-extensions enable "$
 else
     printf 'GNOME Shell has not picked up %s yet.\n' "${UUID}"
 
-    if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
-        printf 'You are on Wayland. Log out and back in, then run: gnome-extensions enable %s\n' "${UUID}"
+    GNOME_SHELL_MAJOR=""
+    if command -v gnome-shell >/dev/null 2>&1; then
+        GNOME_SHELL_MAJOR="$(gnome-shell --version | sed -nE 's/^GNOME Shell ([0-9]+).*/\1/p')"
+    fi
+
+    if [[ "${XDG_SESSION_TYPE:-}" == "x11" && "${GNOME_SHELL_MAJOR}" =~ ^[0-9]+$ && "${GNOME_SHELL_MAJOR}" -lt 50 ]]; then
+        printf 'On GNOME %s with Xorg, press Alt+F2, type r, and press Enter.\n' "${GNOME_SHELL_MAJOR}"
+        printf 'Then run: gnome-extensions enable %s\n' "${UUID}"
     else
-        printf 'Reload GNOME Shell, then run: gnome-extensions enable %s\n' "${UUID}"
-        printf 'On Xorg you can press Alt+F2, type r, and press Enter.\n'
+        printf 'Log out and back in, then run: gnome-extensions enable %s\n' "${UUID}"
     fi
 fi

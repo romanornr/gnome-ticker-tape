@@ -121,9 +121,8 @@ export function inferAssetCategory(ticker) {
         marketSessionId === MARKET_SESSION_IDS.ALWAYS_OPEN ||
         normalizeCryptoLiveSymbol(liveSymbol, ticker?.cryptoProvider) !== '' ||
         hasKnownCryptoProvider(ticker?.cryptoProvider)
-    ) {
+    )
         return ASSET_CATEGORIES.CRYPTO;
-    }
 
     if (marketSessionId === MARKET_SESSION_IDS.WEEKDAY_24H) {
         if (['xauusd', 'xagusd', 'wticrud.f', 'brent.f', 'hg.f', 'ng.f'].includes(symbol))
@@ -138,9 +137,8 @@ export function inferAssetCategory(ticker) {
     if (
         symbol.endsWith('.us') &&
         ['spy.us', 'qqq.us', 'dia.us', 'iwm.us', 'vti.us', 'voo.us', 'ivv.us', 'xlf.us', 'xle.us', 'gld.us', 'slv.us', 'tlt.us', 'uso.us'].includes(symbol)
-    ) {
+    )
         return ASSET_CATEGORIES.ETF;
-    }
 
     return ASSET_CATEGORIES.EQUITY;
 }
@@ -208,9 +206,8 @@ function getSupportedLiveSymbol(ticker, rawLiveSymbol) {
     if (
         ticker.assetCategory === ASSET_CATEGORIES.CRYPTO &&
         explicitLiveSymbol !== ''
-    ) {
+    )
         return explicitLiveSymbol;
-    }
 
     const supportedTicker = SUPPORTED_LIVE_TICKERS.find(candidate =>
         candidate.label === ticker.label &&

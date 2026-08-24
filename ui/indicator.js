@@ -8,11 +8,9 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {DEFAULT_DISPLAY_SETTINGS, getFontPresetStyle} from '../utils/display-settings.js';
 import {getDensityFontScale, shouldFitFontPreset} from '../utils/display-density.js';
-import {
-    DEFAULT_TEXT_COLOR,
-    PRIMARY_TEXT_COLOR,
-    SECONDARY_TEXT_COLOR,
-} from '../utils/format.js';
+
+/* Separators and stale fragments keep the Shell theme color but recede through one shared opacity. */
+const DIMMED_OPACITY = 166;
 
 /*
  * TickerIndicator is the last step of the pipeline: it turns prebuilt entry
@@ -37,7 +35,7 @@ class TickerIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this.menu.addAction('Settings', () => {
             this.menu.close();
-            this._openPreferences?.();
+            this._openPreferences();
         });
     }
 
@@ -60,22 +58,24 @@ class TickerIndicator extends PanelMenu.Button {
             if (entry.separatorBefore) {
                 this._content.add_child(createLabel({
                     text: entry.separatorBefore,
-                    style: buildLabelStyle({color: SECONDARY_TEXT_COLOR, fontStyle}),
+                    style: buildLabelStyle({fontStyle}),
+                    opacity: DIMMED_OPACITY,
                 }));
             }
 
             this._content.add_child(createLabel({
                 text: entry.label,
-                style: buildLabelStyle({color: PRIMARY_TEXT_COLOR, weight: 500, fontStyle}),
+                style: buildLabelStyle({weight: 500, fontStyle}),
             }));
 
             if (entry.showPrice) {
                 this._content.add_child(createLabel({
                     text: ` ${entry.priceText}`,
                     style: buildLabelStyle({
-                        color: entry.priceColor ?? DEFAULT_TEXT_COLOR,
+                        color: entry.priceColor,
                         fontStyle,
                     }),
+                    opacity: entry.isStale ? DIMMED_OPACITY : 255,
                 }));
             }
 
@@ -83,11 +83,12 @@ class TickerIndicator extends PanelMenu.Button {
                 this._content.add_child(createLabel({
                     text: ` ${entry.arrow}`,
                     style: buildLabelStyle({
-                        color: entry.changeColor ?? DEFAULT_TEXT_COLOR,
+                        color: entry.changeColor,
                         weight: 500,
                         fontSize: '0.92em',
                         fontStyle,
                     }),
+                    opacity: entry.isStale ? DIMMED_OPACITY : 255,
                 }));
             }
 
@@ -95,14 +96,14 @@ class TickerIndicator extends PanelMenu.Button {
                 this._content.add_child(createLabel({
                     text: ` ${entry.percentText}`,
                     style: buildLabelStyle({
-                        color: entry.changeColor ?? DEFAULT_TEXT_COLOR,
+                        color: entry.changeColor,
                         weight: 500,
                         fontStyle,
                     }),
+                    opacity: entry.isStale ? DIMMED_OPACITY : 255,
                 }));
             }
         });
-
     }
 
     _applyContentScale() {
@@ -111,8 +112,9 @@ class TickerIndicator extends PanelMenu.Button {
 });
 
 /* Default fonts use GNOME Shell's normal label allocation behavior. */
-function createTickerLabel({text, style}) {
+function createTickerLabel({text, style, opacity = 255}) {
     return new St.Label({
+        opacity,
         text,
         y_align: Clutter.ActorAlign.CENTER,
         style,
@@ -124,26 +126,27 @@ function createTickerLabel({text, style}) {
  * than the default. Disabling ellipsization preserves quote text instead of
  * turning prices into fragments such as "26,...".
  */
-function createFittedTickerLabel({text, style}) {
+function createFittedTickerLabel({text, style, opacity = 255}) {
     const label = new St.Label({
+        opacity,
         text,
         y_align: Clutter.ActorAlign.CENTER,
         x_expand: false,
         style,
     });
-    const textActor = typeof label.get_clutter_text === 'function'
-        ? label.get_clutter_text()
-        : label.clutter_text;
-
-    textActor?.set_ellipsize(Pango.EllipsizeMode.NONE);
-    textActor?.set_line_wrap(false);
+    const textActor = label.get_clutter_text();
+    textActor.set_ellipsize(Pango.EllipsizeMode.NONE);
+    textActor.set_line_wrap(false);
 
     return label;
 }
 
 /* Inline style construction keeps the panel fragment hierarchy consistent without adding stylesheet plumbing. */
-function buildLabelStyle({color, weight = null, fontSize = null, fontStyle = {}}) {
-    const parts = [`color: ${color};`];
+function buildLabelStyle({color = null, weight = null, fontSize = null, fontStyle = {}}) {
+    const parts = [];
+
+    if (color !== null)
+        parts.push(`color: ${color};`);
 
     if (weight !== null)
         parts.push(`font-weight: ${weight};`);

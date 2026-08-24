@@ -9,10 +9,7 @@ import {
  * visibility flags. It is intentionally dumb about where data came from and is
  * reused by both loading/error states and the normal render path.
  */
-export const PRIMARY_TEXT_COLOR = '#e8e8e8';
-export const SECONDARY_TEXT_COLOR = '#a7adb4';
-export const DEFAULT_TEXT_COLOR = PRIMARY_TEXT_COLOR;
-export const STALE_TEXT_COLOR = SECONDARY_TEXT_COLOR;
+/* Neutral fragments use null so the indicator inherits the active Shell theme color. */
 export const POSITIVE_COLOR = '#3FB950';
 export const NEGATIVE_COLOR = '#F85149';
 
@@ -31,8 +28,8 @@ export function createLoadingEntry(ticker, index, displaySettings = DEFAULT_DISP
         displayPrice: null,
         arrow: '',
         percentText: '',
-        priceColor: STALE_TEXT_COLOR,
-        changeColor: STALE_TEXT_COLOR,
+        priceColor: null,
+        changeColor: null,
         isStale: true,
     });
 }
@@ -47,8 +44,8 @@ export function createErrorEntry(ticker, index, displaySettings = DEFAULT_DISPLA
         displayPrice: null,
         arrow: '',
         percentText: '',
-        priceColor: STALE_TEXT_COLOR,
-        changeColor: STALE_TEXT_COLOR,
+        priceColor: null,
+        changeColor: null,
         isStale: true,
     });
 }
@@ -56,7 +53,6 @@ export function createErrorEntry(ticker, index, displaySettings = DEFAULT_DISPLA
 /* Display entries are the normal success path from normalized quotes into panel-facing text fragments. */
 export function createDisplayEntry(ticker, quote, previousClose, index, displaySettings = DEFAULT_DISPLAY_SETTINGS, {isStale = false} = {}) {
     const priceText = formatPrice(quote.price, ticker.priceDecimals);
-    const neutralTextColor = isStale ? STALE_TEXT_COLOR : DEFAULT_TEXT_COLOR;
 
     if (!Number.isFinite(previousClose)) {
         return createBaseEntry({
@@ -67,8 +63,8 @@ export function createDisplayEntry(ticker, quote, previousClose, index, displayS
             displayPrice: quote.price,
             arrow: '',
             percentText: '',
-            priceColor: neutralTextColor,
-            changeColor: neutralTextColor,
+            priceColor: null,
+            changeColor: null,
             isStale,
         });
     }
@@ -83,8 +79,8 @@ export function createDisplayEntry(ticker, quote, previousClose, index, displayS
         displayPrice: quote.price,
         arrow: getArrow(percentChange),
         percentText: formatPercentChange(percentChange),
-        priceColor: neutralTextColor,
-        changeColor: isStale ? STALE_TEXT_COLOR : getChangeColor(percentChange),
+        priceColor: null,
+        changeColor: isStale ? null : getChangeColor(percentChange),
         isStale,
     });
 }
@@ -108,7 +104,7 @@ function createBaseEntry({
         label: ticker.label,
         symbol: ticker.symbol,
         separatorBefore: index > 0
-            ? (ticker.separatorBefore ?? getSeparatorText(displaySettings.separatorStyle))
+            ? ticker.separatorBefore ?? getSeparatorText(displaySettings.separatorStyle)
             : '',
         priceText,
         displayPrice,
@@ -142,7 +138,11 @@ function resolveVisibility(displaySettings) {
         break;
     }
 
-    return {showPrice: presetVisibility.showPrice && settings.showPrice, showArrow: presetVisibility.showArrow && settings.showArrow, showPercent: presetVisibility.showPercent && settings.showPercent};
+    return {
+        showPrice: presetVisibility.showPrice && settings.showPrice,
+        showArrow: presetVisibility.showArrow && settings.showArrow,
+        showPercent: presetVisibility.showPercent && settings.showPercent,
+    };
 }
 
 /* Price text formatting is centralized so all success states display numeric precision consistently. */
@@ -181,5 +181,5 @@ function getChangeColor(percentChange) {
     if (percentChange < 0)
         return NEGATIVE_COLOR;
 
-    return DEFAULT_TEXT_COLOR;
+    return null;
 }

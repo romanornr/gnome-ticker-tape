@@ -118,10 +118,10 @@ export function buildTickerConfig({
     cryptoCatalog,
 }) {
     const effectiveLabel = assetCategory === ASSET_CATEGORIES.CRYPTO && labelText.trim() === ''
-        ? (resolvedCryptoTicker?.label ?? '')
+        ? resolvedCryptoTicker?.label ?? ''
         : labelText.trim();
     const effectiveSymbol = assetCategory === ASSET_CATEGORIES.CRYPTO
-        ? (resolvedCryptoTicker?.liveSymbol ?? symbolText.trim())
+        ? resolvedCryptoTicker?.liveSymbol ?? symbolText.trim()
         : symbolText.trim().toLowerCase();
     const matchingCuratedTicker = findCuratedTicker({
         label: effectiveLabel,
@@ -133,7 +133,7 @@ export function buildTickerConfig({
         ...initialTicker,
         label: effectiveLabel,
         symbol: assetCategory === ASSET_CATEGORIES.CRYPTO
-            ? (resolvedCryptoTicker?.symbol ?? symbolText.trim().toLowerCase())
+            ? resolvedCryptoTicker?.symbol ?? symbolText.trim().toLowerCase()
             : symbolText.trim().toLowerCase(),
         priceDecimals,
         panelSide,

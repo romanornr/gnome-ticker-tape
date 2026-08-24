@@ -58,7 +58,11 @@ The default ticker list is defined in `utils/settings.js`, and the curated sugge
 - `icon.svg`: vector logo shown in the README, and the source the PNG is rendered from
 - `install.sh`: copy-based local install, including runtime module directories
 - `install-dev.sh`: symlink-based development install
-- `check.sh`: canonical local test/import sanity entry point for the current lightweight developer workflow
+- `pack.sh`: canonical release bundle builder; explicitly includes the complete runtime module tree
+- `check.sh`: canonical lint, focused GJS test, and package-inventory verification entry point
+- `check-shell.sh`: isolated packaged-extension lifecycle smoke test for GNOME Shell 49 and 50
+- `tests/shell-smoke.js`: Shell-hosted enable/disable/enable check used by `check-shell.sh`
+- `eslint.config.js`, `package.json`, and `package-lock.json`: pinned GNOME-aligned JavaScript lint toolchain
 - `remove.sh`: remove installed extension
 - `DEBUGGING_GUIDE.md`: debugging notes for extension behavior and API parsing
 

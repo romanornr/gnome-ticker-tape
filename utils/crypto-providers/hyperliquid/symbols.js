@@ -59,9 +59,8 @@ export function scoreHyperliquidCatalogEntry(entry, query) {
     if (
         normalizedLabel.startsWith(normalizedQuery) ||
         normalizedKeywords.some(keyword => keyword.startsWith(normalizedQuery))
-    ) {
+    )
         score = Math.max(score, 620);
-    }
 
     if (
         normalizedLiveSymbol.includes(normalizedQuery) ||
@@ -70,9 +69,8 @@ export function scoreHyperliquidCatalogEntry(entry, query) {
         normalizedQuote.includes(normalizedQuery) ||
         normalizedLabel.includes(normalizedQuery) ||
         normalizedKeywords.some(keyword => keyword.includes(normalizedQuery))
-    ) {
+    )
         score = Math.max(score, 500);
-    }
 
     return score;
 }

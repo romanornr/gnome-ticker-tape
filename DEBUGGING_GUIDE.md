@@ -173,9 +173,11 @@ This tells you exactly where the problem is:
 
 This style of debugging is simple, but it is very effective.
 
-## 8. Expect to reload the shell session on Wayland
+## 8. Expect to restart the session on Wayland and GNOME Shell 50
 
-On Wayland, debugging GNOME Shell extensions is slower than on Xorg because code changes usually require a logout/login cycle. That is annoying, but normal.
+On Wayland, code changes usually require a logout/login cycle. GNOME Shell 50
+also removed X11 support, so it always follows this path. Only GNOME Shell 49
+on an Xorg session can reload in place with `Alt+F2`, `r`, Enter.
 
 So a realistic workflow is:
 
@@ -231,8 +233,8 @@ When the code has been reorganized or split across modules, do not stop at impor
 1. Run `./check.sh`.
 2. Install with `./install-dev.sh` or `./install.sh`.
 3. Follow the session-specific reload instruction:
-   on Wayland, log out and back in;
-   on Xorg, reload GNOME Shell with `Alt+F2`, `r`, Enter.
+   on Wayland and GNOME Shell 50, log out and back in;
+   on GNOME Shell 49 with Xorg, use `Alt+F2`, `r`, Enter.
 4. Watch logs with:
 
 ```bash

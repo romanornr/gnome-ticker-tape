@@ -24,38 +24,37 @@ const LEFT_PANEL_POSITION = 999;
  * In other words, this is the bridge between GNOME Shell lifecycle/events and
  * the rest of the internal market-data system.
  */
+/* TickerPriceExtension owns QuotesService snapshots and projects them into the two panel indicators. */
 export default class TickerPriceExtension extends Extension {
-    /* The extension object owns the shell-visible instances that survive between enable and disable. */
-    constructor(metadata) {
-        super(metadata);
+    /* enable() creates the settings, quote service, and panel update subscription owned by this extension. */
+    enable() {
         this._leftIndicator = null;
         this._rightIndicator = null;
-        this._quotesService = null;
         this._quotesChangedId = 0;
-        this._settings = null;
-    }
-
-    /* enable() is the shell entry hook that boots the extension's runtime graph. */
-    enable() {
-        this._startup();
-    }
-
-    /* disable() mirrors enable() and tears the runtime down from the shell boundary inward. */
-    disable() {
-        this._shutdown();
-    }
-
-    /* Startup creates the runtime service and subscribes the panel to its entry snapshots. */
-    _startup() {
-        this._shutdown();
-
         this._settings = this.getSettings();
-
         this._quotesService = new QuotesService(this.uuid, this._settings);
         this._quotesChangedId = this._quotesService.connect('entries-changed', () => {
             this._syncIndicators(this._quotesService.getEntries());
         });
         this._quotesService.start();
+    }
+
+    /* disable() releases the signal, runtime service, actors, and settings in ownership order. */
+    disable() {
+        if (this._quotesService && this._quotesChangedId !== 0)
+            this._quotesService.disconnect(this._quotesChangedId);
+        this._quotesChangedId = 0;
+
+        this._quotesService?.stop();
+        this._quotesService = null;
+
+        this._leftIndicator?.destroy();
+        this._leftIndicator = null;
+
+        this._rightIndicator?.destroy();
+        this._rightIndicator = null;
+
+        this._settings = null;
     }
 
     /* Entry changes from QuotesService are fanned back out to both panel-side indicators here. */
@@ -108,24 +107,5 @@ export default class TickerPriceExtension extends Extension {
             sideEntries[0].separatorBefore = '';
 
         return sideEntries;
-    }
-
-    /* Shutdown tears the shell-facing boundary down cleanly so a later enable starts from a blank slate. */
-    _shutdown() {
-        if (this._quotesService && this._quotesChangedId !== 0) {
-            this._quotesService.disconnect(this._quotesChangedId);
-            this._quotesChangedId = 0;
-        }
-
-        this._quotesService?.stop();
-        this._quotesService = null;
-
-        this._leftIndicator?.destroy();
-        this._leftIndicator = null;
-
-        this._rightIndicator?.destroy();
-        this._rightIndicator = null;
-
-        this._settings = null;
     }
 }

@@ -51,9 +51,8 @@ export function scoreKrakenCatalogEntry(entry, query) {
         normalizedCompactSymbol.includes(normalizedQuery) ||
         normalizedBase.includes(normalizedQuery) ||
         normalizedQuote.includes(normalizedQuery)
-    ) {
+    )
         score = Math.max(score, 500 - getKrakenQuotePriority(entry.quote));
-    }
 
     return score;
 }

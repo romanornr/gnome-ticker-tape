@@ -47,7 +47,7 @@ export function postHyperliquidInfo(session, body) {
 function cloneHyperliquidCatalogEntries(entries) {
     return entries.map(entry => ({
         ...entry,
-        keywords: [...(entry.keywords ?? [])],
+        keywords: [...entry.keywords ?? []],
     }));
 }
 

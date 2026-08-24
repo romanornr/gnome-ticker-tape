@@ -109,7 +109,7 @@ function scoreCuratedTicker(entry, assetCategory, normalizedQuery) {
     const haystack = [
         entry.label,
         entry.symbol,
-        ...(entry.keywords ?? []),
+        ...entry.keywords ?? [],
         ...getAssetCategorySearchTerms(entry.assetCategory),
     ].map(value => `${value}`.toLowerCase());
 
@@ -150,7 +150,7 @@ function getCatalogForCategory(assetCategory, options = {}) {
 function cloneCatalogEntry(entry) {
     return {
         ...entry,
-        keywords: [...(entry.keywords ?? [])],
+        keywords: [...entry.keywords ?? []],
     };
 }
 

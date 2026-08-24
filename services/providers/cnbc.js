@@ -28,18 +28,13 @@ const DXY_FORMULA = {
  * CNBC maps catalog tickers into batched wire symbols and normalized quotes.
  * FX pairs and DXY derive from per-currency USD spot legs in those same batches.
  */
-export async function refresh(tickers, {session, quiet = false}) {
+export async function refresh(tickers, {session}) {
     if (!session || tickers.length === 0)
         return new Map();
 
     const plan = buildRequestPlan(tickers);
-    if (!quiet && plan.unmappedSymbols.length > 0)
-        logCnbcWarning(`No CNBC mapping for ${plan.unmappedSymbols.length} symbol(s): ${plan.unmappedSymbols.join(', ')}`);
-
-    const quotesByCnbcSymbol = await fetchQuotes(session, plan.requestSymbols, quiet);
-    const quotesBySymbol = assembleQuotes(plan, quotesByCnbcSymbol);
-    if (!quiet) logRefreshResult(tickers, quotesBySymbol);
-    return quotesBySymbol;
+    const quotesByCnbcSymbol = await fetchQuotes(session, plan.requestSymbols);
+    return assembleQuotes(plan, quotesByCnbcSymbol);
 }
 
 /* One batched URL serves runtime polling and verification; "=" and "|" must survive encoding for CNBC's grammar. */
@@ -182,7 +177,6 @@ function buildRequestPlan(tickers) {
     const directRequests = [];
     const fxRequests = [];
     const dxyRequests = [];
-    const unmappedSymbols = [];
     const requestSymbols = new Set();
 
     tickers.forEach(ticker => {
@@ -203,16 +197,14 @@ function buildRequestPlan(tickers) {
         }
 
         const cnbcSymbol = mapSymbolToCnbc(symbol);
-        if (!cnbcSymbol) {
-            unmappedSymbols.push(symbol);
+        if (!cnbcSymbol)
             return;
-        }
 
         directRequests.push({storeKey, cnbcSymbol});
         requestSymbols.add(cnbcSymbol);
     });
 
-    return {directRequests, fxRequests, dxyRequests, unmappedSymbols, requestSymbols: [...requestSymbols]};
+    return {directRequests, fxRequests, dxyRequests, requestSymbols: [...requestSymbols]};
 }
 
 function fxLegSymbols({baseCurrency, quoteCurrency}) {
@@ -251,47 +243,30 @@ function assembleQuotes({directRequests, fxRequests, dxyRequests}, quotesByCnbcS
  * only a pass where every batch failed rethrows, so the caller can still fall
  * back or mark stale.
  */
-async function fetchQuotes(session, cnbcSymbols, quiet) {
+async function fetchQuotes(session, cnbcSymbols) {
     const quotesByCnbcSymbol = new Map();
     let lastError = null;
     let succeededCount = 0;
+    const batchCount = Math.ceil(cnbcSymbols.length / CNBC_BATCH_SIZE);
+    const batches = Array.from({length: batchCount}, (_unused, index) =>
+        cnbcSymbols.slice(index * CNBC_BATCH_SIZE, (index + 1) * CNBC_BATCH_SIZE));
+    const results = await Promise.allSettled(batches.map(batch =>
+        httpGetJson(session, buildQuoteUrl(batch), {
+            timeoutMessage: `Timed out after ${DEFAULT_HTTP_TIMEOUT_SECONDS}s while loading CNBC quotes.`,
+            headers: {'User-Agent': CNBC_USER_AGENT},
+        }).then(parseRestQuoteResponse)));
 
-    for (let index = 0; index < cnbcSymbols.length; index += CNBC_BATCH_SIZE) {
-        const batch = cnbcSymbols.slice(index, index + CNBC_BATCH_SIZE);
-        try {
-            const payload = await httpGetJson(session, buildQuoteUrl(batch), {
-                timeoutMessage: `Timed out after ${DEFAULT_HTTP_TIMEOUT_SECONDS}s while loading CNBC quotes.`,
-                headers: {'User-Agent': CNBC_USER_AGENT},
-            });
-            parseRestQuoteResponse(payload).forEach((quote, cnbcSymbol) => quotesByCnbcSymbol.set(cnbcSymbol, quote));
+    results.forEach(result => {
+        if (result.status === 'fulfilled') {
+            result.value.forEach((quote, cnbcSymbol) => quotesByCnbcSymbol.set(cnbcSymbol, quote));
             succeededCount += 1;
-        } catch (error) {
-            lastError = error;
-            if (!quiet)
-                logCnbcWarning(`CNBC batch of ${batch.length} symbol(s) failed: ${error.message}`);
+        } else {
+            lastError = result.reason;
         }
-    }
+    });
 
     if (succeededCount === 0 && lastError)
         throw lastError;
 
     return quotesByCnbcSymbol;
-}
-
-/* Runtime diagnostics distinguish an empty primary response from a partially usable batch. */
-function logRefreshResult(tickers, quotesBySymbol) {
-    const missingSymbols = tickers
-        .map(ticker => `${ticker?.symbol ?? ''}`.trim().toUpperCase())
-        .filter(storeKey => storeKey !== '' && !quotesBySymbol.has(storeKey));
-
-    if (quotesBySymbol.size === 0)
-        logCnbcWarning('CNBC batch returned no usable quotes.');
-    else if (missingSymbols.length > 0)
-        logCnbcWarning(`CNBC batch missed ${missingSymbols.length} symbol(s): ${missingSymbols.join(', ')}`);
-}
-
-/* Tests run outside GNOME Shell's logging globals, so logging stays optional at the provider boundary. */
-function logCnbcWarning(message) {
-    if (typeof log === 'function')
-        log(`Ticker Tape: ${message}`);
 }

@@ -29,7 +29,7 @@ export class QuoteStore {
     /* Entry-building and provider fallback logic read from the same cache through this lookup. */
     getQuote(symbol) {
         const normalizedSymbol = normalizeSymbol(symbol);
-        return normalizedSymbol === '' ? null : (this._quotesBySymbol.get(normalizedSymbol) ?? null);
+        return normalizedSymbol === '' ? null : this._quotesBySymbol.get(normalizedSymbol) ?? null;
     }
 
     /* When saved tickers change, stale symbols are removed here so old quotes cannot leak back into the panel. */
@@ -84,7 +84,7 @@ export class QuoteStore {
     /* QuotesService asks for the last refresh timestamp when delegating schedule-policy decisions. */
     getLastRefreshUsec(symbol) {
         const normalizedSymbol = normalizeSymbol(symbol);
-        return normalizedSymbol === '' ? 0 : (this._lastRefreshTimeBySymbol.get(normalizedSymbol) ?? 0);
+        return normalizedSymbol === '' ? 0 : this._lastRefreshTimeBySymbol.get(normalizedSymbol) ?? 0;
     }
 
     /* Full shutdown clears both quote values and cadence history so restart begins cleanly. */

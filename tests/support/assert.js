@@ -10,16 +10,6 @@ export function assertDeepEqual(actual, expected, message = 'Expected values to 
         throw new Error(`${message}. Expected ${expectedText}, got ${actualText}.`);
 }
 
-export function assertTruthy(value, message = 'Expected value to be truthy') {
-    if (!value)
-        throw new Error(message);
-}
-
-export function assertFalse(value, message = 'Expected value to be false') {
-    if (value !== false)
-        throw new Error(`${message}. Expected false, got ${formatValue(value)}.`);
-}
-
 function formatValue(value) {
     return typeof value === 'string' ? `"${value}"` : `${value}`;
 }

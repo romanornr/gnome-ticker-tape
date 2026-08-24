@@ -51,7 +51,7 @@ export function createKrakenCatalogEntry(pair) {
 function cloneKrakenSpotPairs(pairs) {
     return pairs.map(entry => ({
         ...entry,
-        keywords: [...(entry.keywords ?? [])],
+        keywords: [...entry.keywords ?? []],
     }));
 }
 
@@ -68,12 +68,12 @@ async function _fetchKrakenSpotPairs() {
         const message = Soup.Message.new('GET', KRAKEN_WEBSOCKET_URL);
         websocket = await new Promise((resolve, reject) => {
             session.websocket_connect_async(message, null, [], GLib.PRIORITY_DEFAULT, null, (_session, result) => {
-                    try {
-                        resolve(session.websocket_connect_finish(result));
-                    } catch (error) {
-                        reject(error);
-                    }
-                });
+                try {
+                    resolve(session.websocket_connect_finish(result));
+                } catch (error) {
+                    reject(error);
+                }
+            });
         });
         websocket.set_max_incoming_payload_size(KRAKEN_INSTRUMENT_MAX_INCOMING_PAYLOAD_SIZE);
 

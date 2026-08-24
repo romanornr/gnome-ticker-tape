@@ -17,7 +17,7 @@ import {
  * loading entrypoint.
  */
 /* The dialog controller calls this provider switchboard to load the correct runtime crypto catalog. */
-export async function loadCryptoCatalog(cryptoProvider) {
+export function loadCryptoCatalog(cryptoProvider) {
     return loadCryptoProviderCatalog(cryptoProvider ?? CRYPTO_PROVIDERS.KRAKEN);
 }
 

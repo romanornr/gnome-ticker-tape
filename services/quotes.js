@@ -36,17 +36,17 @@ export const QuotesService = GObject.registerClass({
         this._settings = settings;
         this._settingsSignalIds = [];
         this._session = null;
-        this._running = false;
+        this._providerHealthStates = new Map();
         this._tickers = loadTickerConfigs(this._settings);
         this._displaySettings = loadDisplaySettings(this._settings);
         this._refreshIntervalSeconds = loadRefreshIntervalSeconds(this._settings);
         this._entries = createLoadingEntries(this._tickers, this._displaySettings);
         this._quoteStore = new QuoteStore();
         this._coordinator = new QuotesCoordinator({
-            onRefresh: forced => this._running ? this._refreshQuotes(forced) : null,
+            onRefresh: forced => this._refreshQuotes(forced),
             onReconnectLiveProviders: () => this._providers.forEach(provider => provider.reconnectNow?.()),
-            onRebuildEntries: async () => {
-                if (!this._running)
+            onRebuildEntries: () => {
+                if (!this._session)
                     return;
 
                 this._entries = buildEntries(
@@ -59,7 +59,7 @@ export const QuotesService = GObject.registerClass({
                 this._coordinator.schedulePriceFlashReset(this._entries);
             },
             onResetPriceFlash: nextEntries => {
-                if (!this._running)
+                if (!this._session)
                     return;
 
                 this._entries = nextEntries;
@@ -80,10 +80,10 @@ export const QuotesService = GObject.registerClass({
 
     /* start() boots the full quote pipeline: settings, providers, initial loading state, and timers. */
     start() {
-        if (this._running)
+        if (this._session)
             return;
 
-        this._running = true;
+        this._providerHealthStates.clear();
         this._session = new Soup.Session();
         this._loadConfiguration();
         this._connectSettingsSignals();
@@ -99,17 +99,18 @@ export const QuotesService = GObject.registerClass({
 
     /* stop() shuts down the quote pipeline in reverse order so sockets, timers, and cache state cannot leak. */
     stop() {
-        if (!this._running && !this._session)
+        if (!this._session)
             return;
 
-        this._running = false;
+        const session = this._session;
+        this._session = null;
 
         this._disconnectSettingsSignals();
         this._coordinator.stop();
 
         this._providers.forEach(provider => provider.stop?.());
-        this._session?.abort();
-        this._session = null;
+        session.abort();
+        this._providerHealthStates.clear();
 
         this._quoteStore.clear();
         this._entries = createLoadingEntries(this._tickers, this._displaySettings);
@@ -123,10 +124,11 @@ export const QuotesService = GObject.registerClass({
     /*
      * A refresh pass first decides what needs data right now, then delegates to
      * the provider that owns each ticker. Live providers participate in normal
-     * polling only while their websocket is unavailable.
+     * polling while disconnected, or for subscriptions the provider rejected.
      */
     async _refreshQuotes(forceRefreshAll = false) {
-        if (!this._running)
+        const session = this._session;
+        if (!session)
             return null;
 
         const now = createMarketScheduleNow();
@@ -134,22 +136,23 @@ export const QuotesService = GObject.registerClass({
             ? this._tickers
             : this._tickers.filter(ticker => this._shouldRefreshTicker(ticker, now));
         const providerRefreshPlan = this._providers
-            .filter(provider => provider.shouldPoll?.() ?? true)
-            .map(provider => ({
-                provider,
-                tickers: tickersToRefresh.filter(ticker => provider.ownsTicker(ticker)),
-            }))
+            .map(provider => {
+                const ownedTickers = tickersToRefresh.filter(ticker => provider.ownsTicker(ticker));
+                return {
+                    provider,
+                    tickers: provider.selectPollTickers?.(ownedTickers) ?? ownedTickers,
+                };
+            })
             .filter(({tickers}) => tickers.length > 0);
 
-        let directRestOutcome = null;
-        for (const {provider, tickers} of providerRefreshPlan) {
-            const outcome = await this._pollProvider(provider, tickers);
-            if (!this._running || outcome === null)
-                return null;
+        const outcomes = await Promise.all(providerRefreshPlan.map(async ({provider, tickers}) => ({
+            outcome: await this._pollProvider(provider, tickers, session),
+            provider,
+        })));
+        if (this._session !== session || outcomes.some(({outcome}) => outcome === null))
+            return null;
 
-            if (provider === restProvider)
-                directRestOutcome = outcome;
-        }
+        const directRestOutcome = outcomes.find(({provider}) => provider === restProvider)?.outcome ?? null;
 
         if (providerRefreshPlan.length > 0)
             this._coordinator.requestEntriesUpdate(true);
@@ -213,12 +216,15 @@ export const QuotesService = GObject.registerClass({
     }
 
     /* Provider polls are isolated and merge into the same normalized QuoteStore boundary. */
-    async _pollProvider(provider, tickers) {
+    async _pollProvider(provider, tickers, session = this._session) {
+        if (!session || this._session !== session)
+            return null;
+
         try {
             const quotesBySymbol = await provider.poll(tickers, {
-                session: this._session,
+                session,
             });
-            if (!this._running)
+            if (this._session !== session)
                 return null;
 
             quotesBySymbol.forEach((quote, symbol) => this._quoteStore.setQuote(symbol, quote));
@@ -226,20 +232,68 @@ export const QuotesService = GObject.registerClass({
             const staleTickers = tickers.filter(ticker => !quotesBySymbol.has(ticker.symbol.toUpperCase()));
             this._quoteStore.markRefreshed(refreshedTickers);
             this._quoteStore.markStale(staleTickers);
+            this._recordProviderHealth(provider, staleTickers.length === 0 ? 'complete' : 'partial', {
+                receivedCount: refreshedTickers.length,
+                requestedCount: tickers.length,
+            });
             return true;
         } catch (error) {
-            if (!this._running)
+            if (this._session !== session)
                 return null;
 
             this._quoteStore.markStale(tickers);
-            logError(error, `${this._uuid}: failed to poll ${provider.id} quotes`);
+            this._recordProviderHealth(provider, 'failed', {error});
             return false;
         }
     }
 
+    /*
+     * Provider diagnostics describe health transitions rather than individual
+     * requests. A degraded epoch can emit one aggregate warning and, if it
+     * worsens, one stack trace; only a complete pass starts a fresh epoch.
+     */
+    _recordProviderHealth(provider, outcome, details = {}) {
+        const providerId = provider.id ?? 'unknown';
+        const unhealthyState = this._providerHealthStates.get(providerId);
+
+        if (outcome === 'complete') {
+            if (unhealthyState) {
+                this._logProviderWarning(`${providerId} quote provider recovered.`);
+                this._providerHealthStates.delete(providerId);
+            }
+            return;
+        }
+
+        if (outcome === 'partial') {
+            if (!unhealthyState) {
+                this._logProviderWarning(
+                    `${providerId} quote provider returned ${details.receivedCount ?? 0} of ` +
+                    `${details.requestedCount ?? 0} requested quote(s).`
+                );
+                this._providerHealthStates.set(providerId, {failureReported: false});
+            }
+            return;
+        }
+
+        if (outcome !== 'failed' || unhealthyState?.failureReported)
+            return;
+
+        const error = details.error ?? new Error(`${providerId} quote provider failed`);
+        this._logProviderError(error, `failed to poll ${providerId} quotes`);
+        this._providerHealthStates.set(providerId, {failureReported: true});
+    }
+
+    _logProviderWarning(message) {
+        log(`${this._uuid}: ${message}`);
+    }
+
+    _logProviderError(error, message) {
+        logError(error, `${this._uuid}: ${message}`);
+    }
+
     /* Live providers push quote bursts through this path so the coordinator can throttle UI churn. */
     _handleLiveQuotes(quotesBySymbol) {
-        if (!this._running || !quotesBySymbol || quotesBySymbol.size === 0)
+        if (!this._session || !quotesBySymbol || quotesBySymbol.size === 0)
             return;
 
         quotesBySymbol.forEach((quote, symbol) => this._quoteStore.setQuote(symbol, quote));
@@ -248,7 +302,7 @@ export const QuotesService = GObject.registerClass({
 
     /* Live transport failures preserve cached quotes but mark them stale until fresh provider data arrives. */
     _handleStaleTickers(tickers) {
-        if (!this._running || !tickers || tickers.length === 0)
+        if (!this._session || !tickers || tickers.length === 0)
             return;
 
         this._quoteStore.markStale(tickers);
@@ -276,5 +330,4 @@ export const QuotesService = GObject.registerClass({
             this._refreshIntervalSeconds
         );
     }
-
 });

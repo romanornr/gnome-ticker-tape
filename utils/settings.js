@@ -153,11 +153,7 @@ export function loadDisplaySettings(settings) {
 }
 
 export function hasSettingsKey(settings, key) {
-    try {
-        return settings?.settings_schema?.has_key(key) ?? false;
-    } catch (_error) {
-        return false;
-    }
+    return settings?.settings_schema?.has_key(key) ?? false;
 }
 
 export function loadRefreshIntervalSeconds(settings) {

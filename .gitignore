@@ -1,4 +1,6 @@
 schemas/gschemas.compiled
+dist/
+node_modules/
 
 # Local agent tooling: caches, indexes, and generated skills, not project source.
 .agents/

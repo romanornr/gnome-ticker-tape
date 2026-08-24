@@ -1,6 +1,6 @@
-import Adw from 'gi://Adw';
+import Adw from 'gi://Adw?version=1';
 import GObject from 'gi://GObject';
-import Gtk from 'gi://Gtk';
+import Gtk from 'gi://Gtk?version=4.0';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
@@ -215,64 +215,51 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
 
         const addRow = new Adw.ActionRow({title: 'Add ticker'});
         addRow.add_suffix(this._createTextButton('+ Add ticker', () => {
-                this._presentAssetCategoryDialog({
-                    title: 'Add ticker',
-                    initialAssetCategory: this._assetCategoryOptions[0].value,
-                    onSelected: assetCategory => {
-                        presentTickerDialog({
-                            window: this._window,
-                            title: 'Add ticker',
-                            initialTicker: {
-                                label: '',
-                                symbol: '',
-                                priceDecimals: 2,
-                                panelSide: addSide,
-                                assetCategory,
-                                marketSessionId: getTickerMarketSessionPolicy({assetCategory}).defaultMarketSessionId,
-                            },
-                            assetCategoryOptions: this._assetCategoryOptions,
-                            cryptoProviderOptions: this._cryptoProviderOptions,
-                            createComboRow: options => this._createComboRow(options),
-                            createTextButton: (label, onClicked) => this._createTextButton(label, onClicked),
-                            findOptionIndex: (options, value) => this._findOptionIndex(options, value),
-                            onSave: newTicker => {
-                                saveTickerConfigs(this._settings, [...tickers, newTicker]);
-                                this._rebuildTickerRows();
-                            },
-                        });
-                    },
+            this._presentAssetCategoryDialog({
+                title: 'Add ticker',
+                initialAssetCategory: this._assetCategoryOptions[0].value,
+                onSelected: assetCategory => {
+                    presentTickerDialog({
+                        window: this._window,
+                        title: 'Add ticker',
+                        initialTicker: {
+                            label: '',
+                            symbol: '',
+                            priceDecimals: 2,
+                            panelSide: addSide,
+                            assetCategory,
+                            marketSessionId: getTickerMarketSessionPolicy({assetCategory}).defaultMarketSessionId,
+                        },
+                        assetCategoryOptions: this._assetCategoryOptions,
+                        cryptoProviderOptions: this._cryptoProviderOptions,
+                        createComboRow: options => this._createComboRow(options),
+                        createTextButton: (label, onClicked) => this._createTextButton(label, onClicked),
+                        findOptionIndex: (options, value) => this._findOptionIndex(options, value),
+                        onSave: newTicker => {
+                            saveTickerConfigs(this._settings, [...tickers, newTicker]);
+                            this._rebuildTickerRows();
+                        },
+                    });
                 },
-                );
+            });
         }));
         this._addTickerRow(group, addRow);
     }
 
     /* Asset-category selection is a lightweight first step so the later ticker dialog opens in the right mode. */
     _presentAssetCategoryDialog({title, initialAssetCategory, onSelected}) {
-        const dialog = new Gtk.Dialog({
-            transient_for: this._window,
-            modal: true,
-            use_header_bar: true,
-            title,
+        const dialog = new Adw.AlertDialog({
+            heading: title,
+            body: 'Choose what kind of ticker you want to add so the right market session and suggestions are ready immediately.',
         });
-        dialog.add_button('Cancel', Gtk.ResponseType.CANCEL);
-        const continueButton = dialog.add_button('Continue', Gtk.ResponseType.OK);
-        continueButton.add_css_class('suggested-action');
-
-        const contentArea = dialog.get_content_area();
-        contentArea.set_margin_top(12);
-        contentArea.set_margin_bottom(12);
-        contentArea.set_margin_start(12);
-        contentArea.set_margin_end(12);
-
-        const content = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 12});
-        contentArea.append(content);
-
-        const introLabel = new Gtk.Label({label: 'Choose what kind of ticker you want to add so the right market session and suggestions are ready immediately.', halign: Gtk.Align.START, wrap: true});
-        content.append(introLabel);
+        dialog.add_response('cancel', 'Cancel');
+        dialog.add_response('continue', 'Continue');
+        dialog.set_close_response('cancel');
+        dialog.set_default_response('continue');
+        dialog.set_response_appearance('continue', Adw.ResponseAppearance.SUGGESTED);
 
         const group = new Adw.PreferencesGroup();
-        content.append(group);
+        dialog.set_extra_child(group);
 
         const categoryRow = this._createComboRow({
             title: 'Asset type',
@@ -282,17 +269,17 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
         });
         group.add(categoryRow);
 
+        /* AlertDialog closes itself before emitting response, so the editor can be presented from this handler. */
         dialog.connect('response', (_dialog, responseId) => {
-            if (responseId === Gtk.ResponseType.OK) {
-                const selectedOption = this._assetCategoryOptions[categoryRow.selected];
-                if (selectedOption)
-                    onSelected(selectedOption.value);
-            }
+            if (responseId !== 'continue')
+                return;
 
-            dialog.destroy();
+            const selectedAssetCategory = this._assetCategoryOptions[categoryRow.selected]?.value;
+            if (selectedAssetCategory !== undefined)
+                onSelected(selectedAssetCategory);
         });
 
-        dialog.present();
+        dialog.present(this._window);
     }
 
     /* Row cleanup is centralized so every rebuild starts from a clean page state. */

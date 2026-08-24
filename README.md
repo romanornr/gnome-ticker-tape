@@ -11,7 +11,7 @@
 <br />
 <br />
 
-<a href="https://www.gnome.org/"><img src="https://img.shields.io/badge/GNOME_Shell-49_|_49.5_|_50-4A86CF?style=flat-square&logo=gnome&logoColor=white" alt="GNOME Shell 49, 49.5, 50" /></a>
+<a href="https://www.gnome.org/"><img src="https://img.shields.io/badge/GNOME_Shell-49_|_50-4A86CF?style=flat-square&logo=gnome&logoColor=white" alt="GNOME Shell 49 and 50" /></a>
 <a href="https://gjs.guide/extensions/"><img src="https://img.shields.io/badge/GJS-ESM,_no_build_step-E9A825?style=flat-square&logo=javascript&logoColor=white" alt="GJS ESM, no build step" /></a>
 <img src="https://img.shields.io/badge/API_key-not_required-2ea44f?style=flat-square" alt="API key not required" />
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPL--2.0--or--later-blue?style=flat-square" alt="GPL-2.0-or-later" /></a>
@@ -36,7 +36,7 @@ It polls less frequently when the market of that ticker is closed.
 A crypto ticker uses a WebSocket connection for live updates.
 
 > [!NOTE]
-> The extension needs GNOME Shell 49, 49.5 or 50.
+> The extension needs GNOME Shell 49 or 50.
 > The UUID is `ticker-tape@romanornr`.
 
 ---
@@ -52,8 +52,9 @@ Use one of these commands:
 | `./remove.sh` | Removes the installed files. |
 
 GNOME Shell reads a new extension only after it starts again.
-On Wayland, log out and log in again.
-On Xorg, press `Alt+F2`, type `r` and press Enter.
+Log out and log in again on Wayland and on GNOME Shell 50.
+Only GNOME Shell 49 on Xorg supports pressing `Alt+F2`, typing `r` and
+pressing Enter to reload the shell in place.
 
 ---
 
@@ -166,6 +167,18 @@ Also use it when you do not want to run `./remove.sh`.
 > The page needs the GNOME Shell Integration browser add-on.
 > Without the add-on, the website cannot control a local extension.
 
+The puzzle image on this page does not mean that the repository logo is
+broken. The local page requests extension details and artwork from the public
+extensions.gnome.org listing; it does not read `icon.png` from the installed
+extension. Until this UUID has an active public listing, the puzzle is the
+expected fallback.
+
+After the first submission is editable, the extension owner uploads
+`icon.png` by clicking the puzzle image on that listing. The existing PNG is
+the 512×512 raster artwork intended for that upload. `icon.svg` remains the
+README source image; SVG is not an accepted listing-icon format. Neither image
+belongs in the installed extension ZIP.
+
 ---
 
 ## Provider layout
@@ -224,7 +237,14 @@ To add a ticker to the catalog:
 
 ## Run the local checks
 
-One command runs the local safety net:
+Install the pinned developer dependencies once after cloning or after the
+lockfile changes:
+
+```bash
+npm ci
+```
+
+Then one command runs the local safety net:
 
 ```bash
 ./check.sh
@@ -232,26 +252,45 @@ One command runs the local safety net:
 
 The command runs these checks:
 
-- `gjs -m tests/run.js`
-- one `gjs -m` import check for each runtime module, provider module and helper module
-  that must load outside the GNOME preferences host
+- ESLint with the GNOME JavaScript rules and the repository's documented style overrides
+- the behavior-oriented GJS suites through `gjs -m tests/run.js`
+- creation and ZIP integrity of the distributable extension
+- an exact comparison between the production source inventory and the ZIP contents
 
-The tests cover these areas:
+The GJS tests cover the boundaries where several helpers compose into visible
+or persisted behavior:
 
 - the market schedule policy
-- the entry-model render
-- the live WebSocket lifecycle and the provider routes
-- the provider adapters and the REST fallback limits
-- the non-crypto quote parse and the live provider payloads
-- the QuotesService orchestration, the coordinator schedule and the lifecycle
-- the ticker config and the preferences dialog state
+- loading, error, fresh, stale and price-flash presentation
+- REST fallback and normalized provider output
+- the live WebSocket lifecycle and provider routing
+- QuotesService refresh, settings and logging behavior
+- saved ticker migration and dialog-to-config behavior
 
-The number of test suites increases when a refactor adds a new seam.
-If `tests/run.js` reports more suites than this list, read the code.
-Then correct this document in the same change.
+Prefer extending one of these composed scenarios to adding a test for every
+small helper. A separate unit test is useful only when a helper owns policy or
+an edge case that cannot be observed clearly through a higher-level output.
 
-`check.sh` does not import `prefs.js`.
-The GNOME preferences resource path exists only in the real preferences host process.
+To exercise the actual packaged extension in an isolated, headless Shell
+session, run:
+
+```bash
+./check-shell.sh
+```
+
+The smoke test installs the ZIP, verifies both panel indicators, disables the
+extension, and enables it again. Run it on both a GNOME Shell 49 and a GNOME
+Shell 50 development environment before release.
+
+Create the release ZIP without running the full check suite with:
+
+```bash
+./pack.sh
+```
+
+By default this writes
+`dist/ticker-tape@romanornr.shell-extension.zip`. Pass one output directory as
+an argument to write it elsewhere.
 
 ---
 
@@ -264,8 +303,8 @@ Do it before you start more feature work.
 2. Install the current tree.
    Run `./install-dev.sh` for development, or `./install.sh` for a copy.
 3. The install script can report that GNOME Shell does not read the extension yet.
-   On Wayland, log out and log in again.
-   On Xorg, press `Alt+F2`, type `r` and press Enter.
+   Log out and back in on Wayland and on GNOME Shell 50.
+   On GNOME Shell 49 with Xorg, press `Alt+F2`, type `r` and press Enter.
 4. Start a log in a second terminal:
 
 ```bash
@@ -282,9 +321,10 @@ journalctl --user -f /usr/bin/gnome-shell
    - A change of `Crypto API` changes the searchable markets and the Save validation.
    - A Kraken ticker and a Hyperliquid ticker each receive live updates.
    - A price change flashes one time. The color then returns to the default color.
-6. If you find a runtime problem, add a `log()` or a `logError()` statement.
-   Put it near the related provider, orchestrator or preferences path.
-   Do this before you refactor more code.
+6. If you find a runtime problem, add a temporary focused diagnostic near the
+   related provider, orchestrator or preferences path. Remove high-frequency
+   diagnostics after the problem is understood so normal refreshes do not
+   flood the journal.
 
 `gnome-extensions info ticker-tape@romanornr` can return no data.
 `gnome-extensions show ticker-tape@romanornr` can also return no data.

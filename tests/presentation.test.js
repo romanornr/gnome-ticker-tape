@@ -1,0 +1,97 @@
+import {buildEntries, clearPriceFlash} from '../services/entry-model.js';
+import {QuoteStore} from '../services/quote-store.js';
+import {getDensityFontScale, getSharedDensityFontScale} from '../utils/display-density.js';
+import {DEFAULT_DISPLAY_SETTINGS, FONT_PRESETS} from '../utils/display-settings.js';
+import {POSITIVE_COLOR} from '../utils/format.js';
+import {MARKET_SESSION_IDS} from '../utils/market-sessions.js';
+import {assertDeepEqual} from './support/assert.js';
+
+const TICKER = {
+    label: 'SPX',
+    symbol: '^spx',
+    priceDecimals: 0,
+    marketSessionId: MARKET_SESSION_IDS.US_EQUITY_EXTENDED,
+};
+
+export function runTests() {
+    const store = new QuoteStore();
+    let entries = buildEntries([TICKER], store, DEFAULT_DISPLAY_SETTINGS);
+    assertDeepEqual(view(entries), [{
+        priceText: '...', percentText: '', arrow: '', priceColor: null,
+        changeColor: null, isStale: true, priceFlash: false,
+    }], 'Missing unattempted quotes should produce one loading entry');
+
+    store.markStale([TICKER]);
+    entries = buildEntries([TICKER], store, DEFAULT_DISPLAY_SETTINGS, entries);
+    assertDeepEqual(view(entries), [{
+        priceText: '--', percentText: '', arrow: '', priceColor: null,
+        changeColor: null, isStale: true, priceFlash: false,
+    }], 'A completed miss should move the same entry to its error state');
+
+    store.setQuote(TICKER.symbol, {price: 5100, quoteDate: '20260323', previousClose: 5000});
+    store.markRefreshed([TICKER]);
+    entries = buildEntries([TICKER], store, DEFAULT_DISPLAY_SETTINGS, entries);
+    assertDeepEqual(view(entries), [{
+        priceText: '5,100', percentText: '2.0%', arrow: '▲', priceColor: null,
+        changeColor: POSITIVE_COLOR, isStale: false, priceFlash: false,
+    }], 'A fresh quote should produce the complete formatted entry');
+
+    store.setQuote(TICKER.symbol, {price: 5200, quoteDate: '20260323', previousClose: 5000});
+    const flashed = buildEntries([TICKER], store, DEFAULT_DISPLAY_SETTINGS, entries);
+    assertDeepEqual(view(flashed), [{
+        priceText: '5,200', percentText: '4.0%', arrow: '▲', priceColor: POSITIVE_COLOR,
+        changeColor: POSITIVE_COLOR, isStale: false, priceFlash: true,
+    }], 'A visible price increase should decorate the composed entry once');
+
+    entries = clearPriceFlash(flashed);
+    assertDeepEqual(view(entries), [{
+        priceText: '5,200', percentText: '4.0%', arrow: '▲', priceColor: null,
+        changeColor: POSITIVE_COLOR, isStale: false, priceFlash: false,
+    }], 'Clearing a flash should restore inherited neutral price text');
+
+    store.setQuote(TICKER.symbol, {price: 5100, quoteDate: '20260323', previousClose: 5200});
+    store.markStale([TICKER]);
+    entries = buildEntries([TICKER], store, DEFAULT_DISPLAY_SETTINGS, entries);
+    assertDeepEqual(view(entries), [{
+        priceText: '5,100', percentText: '1.9%', arrow: '▼', priceColor: null,
+        changeColor: null, isStale: true, priceFlash: false,
+    }], 'Stale values should stay neutral and never start a price flash');
+
+    const shortEntries = [panelEntry('DXY', '98.21'), panelEntry('EUR/USD', '1.0912')];
+    const crowdedEntries = [
+        panelEntry('SPX', '6,870'), panelEntry('NDX', '26,123'), panelEntry('Gold', '4,120'),
+        panelEntry('USO', '138.42'), panelEntry('ETH', '4,812'), panelEntry('BTC', '81,512'),
+    ];
+    const crowdedScale = getDensityFontScale(crowdedEntries, FONT_PRESETS.JETBRAINS_MONO);
+    assertDeepEqual({
+        short: getDensityFontScale(shortEntries, FONT_PRESETS.JETBRAINS_MONO),
+        crowdedIsBounded: crowdedScale < 1 && crowdedScale >= 0.88,
+        shared: getSharedDensityFontScale([shortEntries, crowdedEntries], FONT_PRESETS.JETBRAINS_MONO),
+    }, {short: 1, crowdedIsBounded: true, shared: crowdedScale},
+    'Density policy should remain full-size when short and bounded when crowded');
+}
+
+function view(entries) {
+    return entries.map(entry => ({
+        priceText: entry.priceText,
+        percentText: entry.percentText,
+        arrow: entry.arrow,
+        priceColor: entry.priceColor,
+        changeColor: entry.changeColor,
+        isStale: entry.isStale,
+        priceFlash: entry.priceFlash,
+    }));
+}
+
+function panelEntry(label, priceText) {
+    return {
+        separatorBefore: ' · ',
+        label,
+        priceText,
+        arrow: '▲',
+        percentText: '1.0%',
+        showPrice: true,
+        showArrow: true,
+        showPercent: true,
+    };
+}

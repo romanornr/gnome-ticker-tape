@@ -31,19 +31,16 @@ export function mapSymbolToNasdaq(symbol) {
     return normalized.slice(0, -3).toUpperCase().replace(/-/g, '.');
 }
 
-export async function refresh(tickers, {session, quiet = false}) {
+export async function refresh(tickers, {session}) {
     const quotesBySymbol = new Map();
     if (!session)
         return quotesBySymbol;
 
     const fallbackTickers = tickers.filter(ownsFallbackTicker);
-    if (!quiet && fallbackTickers.length > NASDAQ_MAX_SYMBOLS_PER_PASS)
-        logNasdaqWarning(`Nasdaq fallback capped at ${NASDAQ_MAX_SYMBOLS_PER_PASS} of ${fallbackTickers.length} symbol(s).`);
-
     /* One request per symbol runs concurrently: serialized, a capped pass could stall a refresh for minutes on timeouts. */
     const results = await Promise.all(fallbackTickers
         .slice(0, NASDAQ_MAX_SYMBOLS_PER_PASS)
-        .map(ticker => fetchQuote(session, ticker, quiet)));
+        .map(ticker => fetchQuote(session, ticker)));
 
     results.forEach(result => {
         if (result)
@@ -54,7 +51,7 @@ export async function refresh(tickers, {session, quiet = false}) {
 }
 
 /* A single symbol's failure is contained here so it cannot reject the whole concurrent batch. */
-async function fetchQuote(session, ticker, quiet) {
+async function fetchQuote(session, ticker) {
     const nasdaqSymbol = mapSymbolToNasdaq(ticker.symbol);
     const assetClass = NASDAQ_ASSET_CLASSES.get(ticker.assetCategory);
 
@@ -65,8 +62,7 @@ async function fetchQuote(session, ticker, quiet) {
         });
         const quote = parseQuoteResponse(payload);
         return quote ? {storeKey: ticker.symbol.toUpperCase(), quote} : null;
-    } catch (error) {
-        if (!quiet) logNasdaqError(error, `Nasdaq fallback failed for ${ticker.symbol}`);
+    } catch {
         return null;
     }
 }
@@ -118,18 +114,4 @@ export function normalizeTradeTimestamp(timestampText) {
         return '';
 
     return `${match[3]}${month}${match[2].padStart(2, '0')}`;
-}
-
-/* Tests run outside GNOME Shell's logging globals, so logging stays optional at the provider boundary. */
-function logNasdaqWarning(message) {
-    if (typeof log === 'function')
-        log(`Ticker Tape: ${message}`);
-}
-
-/* Fallback failures never reach QuotesService, so the stack trace has to be logged here or it is lost. */
-function logNasdaqError(error, message) {
-    if (typeof logError === 'function')
-        logError(error, `Ticker Tape: ${message}`);
-    else
-        logNasdaqWarning(`${message}: ${error.message}`);
 }
