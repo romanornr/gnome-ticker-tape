@@ -1,6 +1,6 @@
 import GLib from 'gi://GLib';
 
-import {QuotesCoordinator} from '../services/quotes-coordinator.js';
+import {QuoteUpdateScheduler} from '../services/quote-update-scheduler.js';
 import {QuotesService} from '../services/quotes.js';
 import {ASSET_CATEGORIES} from '../utils/asset-categories.js';
 import {MARKET_SESSION_IDS} from '../utils/market-sessions.js';
@@ -12,7 +12,7 @@ export async function runTests() {
     await testProviderHealthEpoch();
     testSettingsReconfigurePipeline();
     await testStopRejectsLatePollCompletion();
-    await testCoordinatorSingleFlightAndStop();
+    await testSchedulerSingleFlightAndStop();
 }
 
 async function testServicePipeline() {
@@ -98,7 +98,7 @@ function testSettingsReconfigurePipeline() {
             callbacks.push(['subscriptions', tickers.map(item => item.symbol)]);
         },
     }];
-    service._coordinator = {
+    service._scheduler = {
         scheduleRefreshTimer(interval) {
             callbacks.push(['schedule', interval]);
         },
@@ -129,11 +129,10 @@ async function testStopRejectsLatePollCompletion() {
     let entryUpdateRequests = 0;
     service._session = {abort() {}};
     service._providers = [{
-        id: 'deferred',
         ownsTicker: () => true,
         poll: () => pollCompletion,
     }];
-    service._coordinator = {
+    service._scheduler = {
         requestEntriesUpdate() {
             entryUpdateRequests += 1;
         },
@@ -144,96 +143,91 @@ async function testStopRejectsLatePollCompletion() {
     service.stop();
     finishPoll(new Map([['AAPL.US', quote(999)]]));
 
-    assertEqual(await refresh, null,
-        'A provider completion after stop should be discarded');
+    await refresh;
     assertEqual(entryUpdateRequests, 0,
         'A late provider completion should not schedule a UI rebuild');
     assertEqual(service.getEntries()[0].priceText, '...',
         'Stopping should leave a clean loading snapshot rather than expose late data');
 }
 
-async function testCoordinatorSingleFlightAndStop() {
+async function testSchedulerSingleFlightAndStop() {
+    const firstPass = Promise.withResolvers();
     const scopes = [];
-    const {promise: firstPass, resolve: finishFirst} = Promise.withResolvers();
-    const {promise: secondPassStarted, resolve: resolveSecondPassStarted} = Promise.withResolvers();
     let rebuilds = 0;
-    const coordinator = new QuotesCoordinator({
-        onRefresh: async forced => {
+    let reconnects = 0;
+    const networkMonitor = new FakeNetworkMonitor();
+    const scheduler = new QuoteUpdateScheduler({
+        onRefresh(forced) {
             scopes.push(forced);
             if (scopes.length === 1)
-                await firstPass;
-            else
-                resolveSecondPassStarted();
-            return true;
+                return firstPass.promise;
+        },
+        onReconnectLiveProviders() {
+            reconnects += 1;
         },
         onRebuildEntries() {
             rebuilds += 1;
         },
-        networkMonitor: new FakeNetworkMonitor(),
+        networkMonitor,
     });
-    coordinator.scheduleRefreshTimer(3600);
-    coordinator.requestRefresh(false);
-    coordinator.requestRefresh(false);
-    coordinator.requestRefresh(true);
-    assertDeepEqual(scopes, [false],
-        'Overlapping refresh requests should keep one provider pass in flight');
+    scheduler.scheduleRefreshTimer(3600);
+    scheduler.requestRefresh(false);
+    scheduler.requestRefresh(false);
+    firstPass.resolve();
+    await firstPass.promise;
+    assertDeepEqual(scopes, [false], 'An overlapping ordinary timer tick should be discarded');
 
-    finishFirst();
-    await withTimeout(secondPassStarted, 'Timed out waiting for the queued refresh pass');
-    assertDeepEqual(scopes, [false, true],
-        'Queued refreshes should coalesce once, with forced scope winning');
-    coordinator.requestEntriesUpdate(true);
-    coordinator.requestEntriesUpdate(false);
-    const pendingUpdateId = coordinator._entriesUpdateTimeoutId;
-    coordinator._lastEntriesUpdateUsec = 0;
-    coordinator.requestEntriesUpdate(false);
+    networkMonitor.emit(true);
+    networkMonitor.emit(false);
+    networkMonitor.emit(true);
+    assertDeepEqual([reconnects, scopes], [1, [false, true]],
+        'Only restored network availability should reconnect providers and force a refresh');
+
+    scheduler.requestEntriesUpdate(true);
+    scheduler.requestEntriesUpdate(false);
+    const pendingUpdateId = scheduler._entriesUpdateTimeoutId;
+    scheduler._lastEntriesUpdateUsec = 0;
+    scheduler.requestEntriesUpdate(false);
     assertDeepEqual([
-        coordinator._entriesUpdateTimeoutId,
+        scheduler._entriesUpdateTimeoutId,
         GLib.MainContext.default().find_source_by_id(pendingUpdateId),
         rebuilds,
     ], [0, null, 2],
     'A due rebuild should replace an older throttled source instead of running twice');
-    coordinator.stop();
+    scheduler.stop();
 
-    const {promise: oldPass, resolve: finishOldPass} = Promise.withResolvers();
-    const {promise: restartedPass, resolve: finishRestartedPass} = Promise.withResolvers();
-    const {promise: restartedPassStarted, resolve: resolveRestartedPassStarted} = Promise.withResolvers();
-    const {promise: queuedPassStarted, resolve: resolveQueuedPassStarted} = Promise.withResolvers();
+    const oldPass = Promise.withResolvers();
+    const restartedPass = Promise.withResolvers();
+    const queuedPassStarted = Promise.withResolvers();
     let lateCalls = 0;
-    const lateCoordinator = new QuotesCoordinator({
+    const lateScheduler = new QuoteUpdateScheduler({
         onRefresh: () => {
             lateCalls += 1;
             if (lateCalls === 1)
-                return oldPass;
-            if (lateCalls === 2) {
-                resolveRestartedPassStarted();
-                return restartedPass;
-            }
-
-            resolveQueuedPassStarted();
-            return true;
+                return oldPass.promise;
+            if (lateCalls === 2)
+                return restartedPass.promise;
+            queuedPassStarted.resolve();
         },
         networkMonitor: new FakeNetworkMonitor(),
     });
-    lateCoordinator.scheduleRefreshTimer(3600);
-    lateCoordinator.requestRefresh(false);
-    lateCoordinator.requestRefresh(true);
-    lateCoordinator.stop();
-    lateCoordinator.scheduleRefreshTimer(3600);
-    lateCoordinator.requestRefresh(true);
-    await withTimeout(restartedPassStarted, 'Timed out waiting for the restarted lifecycle refresh');
+    lateScheduler.scheduleRefreshTimer(3600);
+    lateScheduler.requestRefresh(false);
+    lateScheduler.stop();
+    lateScheduler.scheduleRefreshTimer(3600);
+    lateScheduler.requestRefresh(true);
 
-    finishOldPass(false);
-    await oldPass;
-    lateCoordinator.requestRefresh(false);
+    oldPass.resolve();
+    await oldPass.promise;
+    lateScheduler.requestRefresh(true);
     assertEqual(lateCalls, 2,
         'An old completion must not release the restarted lifecycle single-flight guard');
 
-    finishRestartedPass(true);
-    await withTimeout(queuedPassStarted, 'Timed out waiting for the restarted lifecycle queued refresh');
+    restartedPass.resolve();
+    await withTimeout(queuedPassStarted.promise, 'Timed out waiting for the queued forced refresh');
     assertEqual(lateCalls, 3,
-        'Restarted lifecycle requests should still coalesce and run after its own active pass');
-    lateCoordinator.stop();
+        'A forced request should run after the active pass in its own lifecycle');
+    lateScheduler.stop();
 }
 
 function ticker(label = 'AAPL', symbol = 'aapl.us') {
@@ -285,11 +279,16 @@ class FakeNetworkMonitor {
         return true;
     }
 
-    connect() {
+    connect(_signal, handler) {
+        this._handler = handler;
         return 1;
     }
 
     disconnect() {}
+
+    emit(available) {
+        this._handler(this, available);
+    }
 }
 
 function withTimeout(promise, message, milliseconds = 1000) {

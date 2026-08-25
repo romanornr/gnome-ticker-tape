@@ -2,7 +2,7 @@ import GObject from 'gi://GObject';
 import Soup from 'gi://Soup?version=3.0';
 
 import {buildEntries} from './entry-model.js';
-import {QuotesCoordinator} from './quotes-coordinator.js';
+import {QuoteUpdateScheduler} from './quote-update-scheduler.js';
 import {QuoteStore} from './quote-store.js';
 import {HyperliquidProvider} from './providers/hyperliquid-live.js';
 import {KrakenProvider} from './providers/kraken-live.js';
@@ -41,7 +41,7 @@ export const QuotesService = GObject.registerClass({
         this._refreshIntervalSeconds = loadRefreshIntervalSeconds(this._settings);
         this._entries = createLoadingEntries(this._tickers, this._displaySettings);
         this._quoteStore = new QuoteStore();
-        this._coordinator = new QuotesCoordinator({
+        this._scheduler = new QuoteUpdateScheduler({
             onRefresh: forced => this._refreshQuotes(forced),
             onReconnectLiveProviders: () => this._providers.forEach(provider => provider.reconnectNow?.()),
             onRebuildEntries: () => {
@@ -55,7 +55,7 @@ export const QuotesService = GObject.registerClass({
                     this._entries
                 );
                 this.emit('entries-changed');
-                this._coordinator.schedulePriceFlashReset(this._entries);
+                this._scheduler.schedulePriceFlashReset(this._entries);
             },
             onResetPriceFlash: nextEntries => {
                 if (!this._session)
@@ -92,8 +92,8 @@ export const QuotesService = GObject.registerClass({
         this._providers.forEach(provider => provider.start?.(this._session));
         this._updateProviderSubscriptions();
 
-        this._coordinator.scheduleRefreshTimer(this._refreshIntervalSeconds);
-        this._coordinator.requestRefresh(true);
+        this._scheduler.scheduleRefreshTimer(this._refreshIntervalSeconds);
+        this._scheduler.requestRefresh(true);
     }
 
     /* stop() shuts down the quote pipeline in reverse order so sockets, timers, and cache state cannot leak. */
@@ -105,7 +105,7 @@ export const QuotesService = GObject.registerClass({
         this._session = null;
 
         this._disconnectSettingsSignals();
-        this._coordinator.stop();
+        this._scheduler.stop();
 
         this._providers.forEach(provider => provider.stop?.());
         session.abort();
@@ -128,7 +128,7 @@ export const QuotesService = GObject.registerClass({
     async _refreshQuotes(forceRefreshAll = false) {
         const session = this._session;
         if (!session)
-            return null;
+            return;
 
         const now = createMarketScheduleNow();
         const tickersToRefresh = forceRefreshAll
@@ -144,19 +144,14 @@ export const QuotesService = GObject.registerClass({
             })
             .filter(({tickers}) => tickers.length > 0);
 
-        const outcomes = await Promise.all(providerRefreshPlan.map(async ({provider, tickers}) => ({
-            outcome: await this._pollProvider(provider, tickers, session),
-            provider,
-        })));
-        if (this._session !== session || outcomes.some(({outcome}) => outcome === null))
-            return null;
-
-        const directRestOutcome = outcomes.find(({provider}) => provider === restProvider)?.outcome ?? null;
+        await Promise.all(providerRefreshPlan.map(
+            ({provider, tickers}) => this._pollProvider(provider, tickers, session)
+        ));
+        if (this._session !== session)
+            return;
 
         if (providerRefreshPlan.length > 0)
-            this._coordinator.requestEntriesUpdate(true);
-
-        return directRestOutcome;
+            this._scheduler.requestEntriesUpdate(true);
     }
 
     /*
@@ -173,13 +168,13 @@ export const QuotesService = GObject.registerClass({
                 this._quoteStore.prune(this._tickers.map(ticker => ticker.symbol));
                 this._entries = createLoadingEntries(this._tickers, this._displaySettings);
                 this.emit('entries-changed');
-                this._coordinator.scheduleRefreshTimer(this._refreshIntervalSeconds);
+                this._scheduler.scheduleRefreshTimer(this._refreshIntervalSeconds);
                 this._updateProviderSubscriptions();
-                this._coordinator.requestRefresh(true);
+                this._scheduler.requestRefresh(true);
             }),
             this._settings.connect(`changed::${SETTINGS_KEYS.REFRESH_INTERVAL_SECONDS}`, () => {
                 this._refreshIntervalSeconds = loadRefreshIntervalSeconds(this._settings);
-                this._coordinator.scheduleRefreshTimer(this._refreshIntervalSeconds);
+                this._scheduler.scheduleRefreshTimer(this._refreshIntervalSeconds);
             }),
             this._settings.connect(`changed::${SETTINGS_KEYS.FORMAT_PRESET}`, () => this._handleDisplaySettingsChanged()),
             this._settings.connect(`changed::${SETTINGS_KEYS.SHOW_PRICE}`, () => this._handleDisplaySettingsChanged()),
@@ -199,7 +194,7 @@ export const QuotesService = GObject.registerClass({
     /* Display-only settings do not require refetching quotes, only rebuilding the current entry models. */
     _handleDisplaySettingsChanged() {
         this._displaySettings = loadDisplaySettings(this._settings);
-        this._coordinator.requestEntriesUpdate(true);
+        this._scheduler.requestEntriesUpdate(true);
     }
 
     /* Configuration is always reloaded from settings before major orchestration steps. */
@@ -212,14 +207,14 @@ export const QuotesService = GObject.registerClass({
     /* Provider polls are isolated and merge into the same normalized QuoteStore boundary. */
     async _pollProvider(provider, tickers, session = this._session) {
         if (!session || this._session !== session)
-            return null;
+            return;
 
         try {
             const quotesBySymbol = await provider.poll(tickers, {
                 session,
             });
             if (this._session !== session)
-                return null;
+                return;
 
             quotesBySymbol.forEach((quote, symbol) => this._quoteStore.setQuote(symbol, quote));
             const refreshedTickers = tickers.filter(ticker => quotesBySymbol.has(ticker.symbol.toUpperCase()));
@@ -230,14 +225,12 @@ export const QuotesService = GObject.registerClass({
                 receivedCount: refreshedTickers.length,
                 requestedCount: tickers.length,
             });
-            return true;
         } catch (error) {
             if (this._session !== session)
-                return null;
+                return;
 
             this._quoteStore.markStale(tickers);
             this._recordProviderHealth(provider, 'failed', {error});
-            return false;
         }
     }
 
@@ -285,13 +278,13 @@ export const QuotesService = GObject.registerClass({
         logError(error, `${this._uuid}: ${message}`);
     }
 
-    /* Live providers push quote bursts through this path so the coordinator can throttle UI churn. */
+    /* Live providers push quote bursts through this path so the scheduler can throttle UI churn. */
     _handleLiveQuotes(quotesBySymbol) {
         if (!this._session || !quotesBySymbol || quotesBySymbol.size === 0)
             return;
 
         quotesBySymbol.forEach((quote, symbol) => this._quoteStore.setQuote(symbol, quote));
-        this._coordinator.requestEntriesUpdate(false);
+        this._scheduler.requestEntriesUpdate(false);
     }
 
     /* Live transport failures preserve cached quotes but mark them stale until fresh provider data arrives. */
@@ -300,7 +293,7 @@ export const QuotesService = GObject.registerClass({
             return;
 
         this._quoteStore.markStale(tickers);
-        this._coordinator.requestEntriesUpdate(true);
+        this._scheduler.requestEntriesUpdate(true);
     }
 
     /* Saved ticker changes are reconciled into both live providers through this shared handoff. */

@@ -13,7 +13,7 @@ The default ticker list is defined in `utils/settings.js`, and the curated sugge
 - `services/quotes.js`: settings-backed composition of REST/live providers, quote storage, and entry updates
 - `services/quote-store.js`: in-memory quote cache and refresh-cadence timestamps for normalized symbols
 - `services/entry-model.js`: panel entry/view-model building, including loading/error states and price-flash decoration
-- `services/quotes-coordinator.js`: refresh timer, throttled entry rebuild scheduling, and price-flash reset coordination for `QuotesService`
+- `services/quote-update-scheduler.js`: refresh timer, throttled entry rebuild scheduling, and price-flash reset timing for `QuotesService`
 - `services/providers/rest-quotes.js`: shared REST refresh/verification capability — CNBC primary with narrow Nasdaq/FX-rate-table fallbacks for missed symbols
 - `services/providers/cnbc.js`: batched CNBC quote fetching/parsing and FX derivation from USD spot rates
 - `services/providers/cnbc-symbols.js`: catalog-symbol-to-CNBC-grammar mapping (suffix rules, futures/index overrides, FX pair parsing)
@@ -82,9 +82,8 @@ If a key repo file is created, renamed, or deleted, update this `AGENTS.md` file
 - Prefer the batched quote endpoint for current prices.
 - Maintain one persistent Kraken public WebSocket connection for all saved crypto pairs rather than opening one socket per ticker.
 - Maintain one persistent Hyperliquid public WebSocket connection for all saved Hyperliquid crypto markets rather than opening one socket per ticker.
-- Keep REST fallback behavior on the normal polling cadence if the crypto socket disconnects; do not increase REST frequency because the socket is down. One exception: a rejected direct-REST pass arms a bounded retry ladder that forces every provider, so a disconnected socket's fallback polls a few times faster until the ladder reaches the base interval.
+- Keep disconnected live providers on the normal REST polling cadence and reconnect their sockets conservatively. A false-to-true network-availability edge reconnects them and forces one immediate refresh.
 - Throttle crypto-driven UI updates so the top bar is not repainted on every trade.
-- Reconnect the Kraken socket conservatively and avoid aggressive retry loops.
 - Previous close should be cached per symbol and invalidated based on the provider quote date, not the user's local timezone.
 - Do not hard-code market open, pre-market, or rollover times using the local system clock.
 - Treat crypto and index session boundaries according to the provider's returned date.

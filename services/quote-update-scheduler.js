@@ -4,16 +4,12 @@ import GLib from 'gi://GLib';
 import {clearPriceFlash} from './entry-model.js';
 const CRYPTO_UI_UPDATE_INTERVAL_SECONDS = 4;
 const PRICE_FLASH_DURATION_MS = 700;
-const REST_RETRY_INITIAL_SECONDS = 5;
 
 /*
- * QuotesCoordinator owns timing and pacing for the quote pipeline.
- *
- * It coalesces refresh and entry-update work, owns retry and display timers,
- * and translates restored network availability into one recovery attempt.
+ * QuoteUpdateScheduler owns polling, live-update throttling, and display timers.
+ * It also turns restored network availability into one recovery attempt.
  */
-export class QuotesCoordinator {
-    /* The coordinator is created with callbacks so QuotesService can supply policy without re-owning timers. */
+export class QuoteUpdateScheduler {
     constructor({
         onRefresh,
         onReconnectLiveProviders = () => {},
@@ -31,39 +27,29 @@ export class QuotesCoordinator {
         this._networkAvailable = false;
         this._refreshTimeoutId = 0;
         this._refreshInProgress = false;
-        this._refreshQueued = null;
-        this._refreshIntervalSeconds = 0;
-        this._restRetryTimeoutId = 0;
-        this._restRetryAttempt = 0;
+        this._forcedRefreshQueued = false;
         this._entriesUpdateTimeoutId = 0;
         this._lastEntriesUpdateUsec = 0;
         this._priceFlashTimeoutId = 0;
     }
 
-    /* stop() is the single timer cleanup point for the entire timing subsystem. */
+    /* Each lifecycle clears all of its timers and network state here. */
     stop() {
         this._lifecycleGeneration += 1;
         this._refreshTimeoutId = removeTimeout(this._refreshTimeoutId);
-        this._restRetryTimeoutId = removeTimeout(this._restRetryTimeoutId);
         this._entriesUpdateTimeoutId = removeTimeout(this._entriesUpdateTimeoutId);
         this._priceFlashTimeoutId = removeTimeout(this._priceFlashTimeoutId);
         if (this._networkMonitorSignalId !== 0)
             this._networkMonitor.disconnect(this._networkMonitorSignalId);
         this._networkMonitorSignalId = 0;
         this._refreshInProgress = false;
-        this._refreshQueued = null;
-        this._restRetryAttempt = 0;
+        this._forcedRefreshQueued = false;
         this._lastEntriesUpdateUsec = 0;
     }
 
-    /*
-     * The base refresh timer drives the normal polling cadence independently from UI rebuild throttling.
-     * This is also what activates the coordinator: refresh requests and network recovery no-op until it runs.
-     */
+    /* Scheduling the polling timer activates refresh and network recovery. */
     scheduleRefreshTimer(refreshIntervalSeconds) {
-        this._refreshIntervalSeconds = refreshIntervalSeconds;
         if (this._networkMonitorSignalId === 0) {
-            this._lifecycleGeneration += 1;
             this._networkAvailable = this._networkMonitor.get_network_available();
             this._networkMonitorSignalId = this._networkMonitor.connect(
                 'network-changed',
@@ -81,13 +67,13 @@ export class QuotesCoordinator {
         );
     }
 
-    /* Refresh requests are single-flight; a queued forced pass wins on merge. */
+    /* Provider passes are single-flight; only forced work survives an overlap. */
     requestRefresh(forced = false) {
         if (this._networkMonitorSignalId === 0)
             return;
 
         if (this._refreshInProgress) {
-            this._refreshQueued = this._refreshQueued === true || forced;
+            this._forcedRefreshQueued ||= forced;
             return;
         }
 
@@ -126,7 +112,6 @@ export class QuotesCoordinator {
         );
     }
 
-    /* Price flash reset is managed separately so rebuild timing and flash timing do not interfere. */
     schedulePriceFlashReset(entries) {
         this._priceFlashTimeoutId = removeTimeout(this._priceFlashTimeoutId);
 
@@ -151,79 +136,39 @@ export class QuotesCoordinator {
         this._onRebuildEntries();
     }
 
+    /* The generation prevents late completions from mutating a replacement lifecycle. */
     async _runRefresh(forced) {
-        if (this._refreshInProgress)
-            return;
-
         const lifecycleGeneration = this._lifecycleGeneration;
         this._refreshInProgress = true;
 
         try {
-            const directRestOutcome = await this._onRefresh(forced);
-            if (this._isCurrentLifecycle(lifecycleGeneration) && directRestOutcome === true)
-                this._resetRestRetry();
-            else if (this._isCurrentLifecycle(lifecycleGeneration) && directRestOutcome === false)
-                this._scheduleRestRetry();
+            await this._onRefresh(forced);
         } finally {
-            if (this._isCurrentLifecycle(lifecycleGeneration)) {
+            if (this._lifecycleGeneration === lifecycleGeneration) {
                 this._refreshInProgress = false;
-                const queuedForced = this._refreshQueued;
-                this._refreshQueued = null;
-                if (queuedForced !== null)
-                    this.requestRefresh(queuedForced);
+                if (this._forcedRefreshQueued) {
+                    this._forcedRefreshQueued = false;
+                    this.requestRefresh(true);
+                }
             }
         }
     }
 
-    /* Async completions may mutate timing state only within the lifecycle that started them. */
-    _isCurrentLifecycle(generation) {
-        return this._networkMonitorSignalId !== 0 && this._lifecycleGeneration === generation;
-    }
-
-    /* Only a rejected direct REST poll advances the bounded fast-retry ladder. */
-    _scheduleRestRetry() {
-        if (this._networkMonitorSignalId === 0 || this._restRetryTimeoutId !== 0)
-            return;
-
-        const delaySeconds = REST_RETRY_INITIAL_SECONDS * 2 ** this._restRetryAttempt;
-        if (delaySeconds >= this._refreshIntervalSeconds)
-            return;
-
-        this._restRetryAttempt += 1;
-        this._restRetryTimeoutId = GLib.timeout_add_seconds(
-            GLib.PRIORITY_DEFAULT,
-            delaySeconds,
-            () => {
-                this._restRetryTimeoutId = 0;
-                this.requestRefresh(true);
-                return GLib.SOURCE_REMOVE;
-            }
-        );
-    }
-
-    _resetRestRetry() {
-        this._restRetryTimeoutId = removeTimeout(this._restRetryTimeoutId);
-        this._restRetryAttempt = 0;
-    }
-
     /*
-     * Link restoration permits one immediate recovery attempt without declaring the providers healthy.
-     * network-changed also fires for routine reconfiguration, so only a false-to-true edge is recovery;
-     * reacting to every available event would tear down healthy sockets whenever a route or VPN changed.
+     * Only a false-to-true edge is recovery: available events also report route
+     * and VPN changes, where reconnecting would tear down healthy sockets.
      */
     _handleNetworkChanged(available) {
         const restored = available && !this._networkAvailable;
         this._networkAvailable = available;
-        if (this._networkMonitorSignalId === 0 || !restored)
+        if (!restored)
             return;
 
-        this._resetRestRetry();
         this._onReconnectLiveProviders();
         this.requestRefresh(true);
     }
 }
 
-/* Timeout removal is centralized so all coordinator timers share the same cleanup semantics. */
 function removeTimeout(sourceId) {
     if (sourceId === 0)
         return 0;
