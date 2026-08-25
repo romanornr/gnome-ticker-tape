@@ -6,23 +6,21 @@ import {
     POSITIVE_COLOR,
 } from '../utils/format.js';
 
-/* QuoteStore state becomes loading, error, and display entries; market policy stays upstream. */
-export function buildEntries(tickers, quoteStore, displaySettings, previousEntries = []) {
-    const baseEntries = tickers.map((ticker, index) => {
+/* QuoteStore state becomes one panel entry per saved ticker, including duplicates. */
+export function buildEntries(tickers, quoteStore, previousEntries = []) {
+    const entries = tickers.map(ticker => {
         const {quote, stale} = quoteStore.getState(ticker.symbol);
 
         if (!quote && !stale)
-            return createLoadingEntry(ticker, index, displaySettings);
+            return createLoadingEntry(ticker);
 
         if (!quote)
-            return createErrorEntry(ticker, index, displaySettings);
+            return createErrorEntry(ticker);
 
-        return createDisplayEntry(ticker, quote, quote.previousClose, index, displaySettings, {
-            isStale: stale,
-        });
+        return createDisplayEntry(ticker, quote, {isStale: stale});
     });
 
-    return decorateEntriesWithPriceFlash(baseEntries, previousEntries);
+    return decorateEntriesWithPriceFlash(entries, previousEntries);
 }
 
 /* After the temporary flash window expires, entries return to the theme's inherited text color. */
@@ -34,17 +32,15 @@ export function clearPriceFlash(entries) {
     }));
 }
 
-/* Price flash compares the new view-model to the previous render, not to raw quotes. */
 function decorateEntriesWithPriceFlash(entries, previousEntries) {
-    const previousEntriesBySymbol = new Map(previousEntries.map(entry => [entry.symbol.toUpperCase(), entry]));
-
-    return entries.map(entry => {
-        const previousEntry = previousEntriesBySymbol.get(entry.symbol.toUpperCase());
+    return entries.map((entry, index) => {
+        const previousEntry = previousEntries[index];
         const previousPrice = previousEntry?.displayPrice;
 
         if (
             entry.isStale ||
             !previousEntry ||
+            previousEntry.symbol !== entry.symbol ||
             !Number.isFinite(previousPrice) ||
             !Number.isFinite(entry.displayPrice) ||
             previousEntry.priceText === entry.priceText

@@ -1,25 +1,17 @@
 /* Provider quote objects are normalized here so both REST and websocket paths emit the same shape. */
-export function createHyperliquidQuote(entry, fallbackPreviousClose = null) {
-    const price = firstFiniteNumber(entry?.ctx?.midPx, entry?.ctx?.markPx);
-    const previousClose = firstFinitePositiveNumber(entry?.ctx?.prevDayPx, fallbackPreviousClose);
+export function createHyperliquidQuote(entry) {
+    const price = firstPositiveNumber(entry?.ctx?.midPx, entry?.ctx?.markPx);
+    if (price === null) return null;
 
-    if (!Number.isFinite(price)) return null;
-
-    return {price, quoteDate: getCurrentUtcDate(), previousClose: Number.isFinite(previousClose) ? previousClose : null};
+    const previousClose = Number.parseFloat(`${entry?.ctx?.prevDayPx ?? ''}`);
+    return {
+        price,
+        quoteDate: getCurrentUtcDate(),
+        previousClose: Number.isFinite(previousClose) && previousClose > 0 ? previousClose : null,
+    };
 }
 
-/* Quote normalization picks the first usable numeric field from Hyperliquid's multiple price representations. */
-function firstFiniteNumber(...values) {
-    for (const value of values) {
-        const parsed = Number.parseFloat(`${value ?? ''}`);
-        if (Number.isFinite(parsed)) return parsed;
-    }
-
-    return null;
-}
-
-/* Previous close fallbacks require a positive finite number, not just any parseable float. */
-function firstFinitePositiveNumber(...values) {
+function firstPositiveNumber(...values) {
     for (const value of values) {
         const parsed = Number.parseFloat(`${value ?? ''}`);
         if (Number.isFinite(parsed) && parsed > 0) return parsed;
@@ -28,7 +20,7 @@ function firstFinitePositiveNumber(...values) {
     return null;
 }
 
-/* Hyperliquid quote dates are represented in UTC date form for cache invalidation and display consistency. */
+/* Hyperliquid omits a quote timestamp, so cache dates use the current UTC day. */
 function getCurrentUtcDate() {
     return new Date().toISOString().slice(0, 10).replaceAll('-', '');
 }

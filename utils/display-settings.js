@@ -1,15 +1,4 @@
-/*
- * This module centralizes display-oriented defaults and option catalogs.
- *
- * It exists so formatting/prefs code can share one definition of presets,
- * separators, and refresh interval options without pushing that UI metadata back
- * into the heavier settings-normalization module.
- */
-export const FORMAT_PRESETS = {
-    DEFAULT: 'default',
-    CHANGE: 'change-only',
-    PRICE: 'price-only',
-};
+/* Display defaults and option lists shared by prefs and panel rendering. */
 
 export const SEPARATOR_STYLES = {
     DOT: 'dot',
@@ -28,7 +17,6 @@ export const FONT_PRESETS = {
 export const DEFAULT_REFRESH_INTERVAL_SECONDS = 300;
 
 export const DEFAULT_DISPLAY_SETTINGS = {
-    formatPreset: FORMAT_PRESETS.DEFAULT,
     showPrice: true,
     showArrow: true,
     showPercent: true,
@@ -36,7 +24,6 @@ export const DEFAULT_DISPLAY_SETTINGS = {
     fontPreset: FONT_PRESETS.SYSTEM,
 };
 
-/* Formatters call this helper to turn the saved separator style into the actual panel text fragment. */
 export function getSeparatorText(separatorStyle) {
     switch (separatorStyle) {
     case SEPARATOR_STYLES.PIPES:
@@ -49,16 +36,6 @@ export function getSeparatorText(separatorStyle) {
     }
 }
 
-/* prefs reads these presets to expose the supported coarse display modes of the entry-formatting layer. */
-export function getFormatPresetOptions() {
-    return [
-        {value: FORMAT_PRESETS.DEFAULT, title: 'Ticker + price + change'},
-        {value: FORMAT_PRESETS.CHANGE, title: 'Ticker + change'},
-        {value: FORMAT_PRESETS.PRICE, title: 'Ticker + price'},
-    ];
-}
-
-/* Separator options stay centralized so formatting and prefs share the same allowed values and labels. */
 export function getSeparatorOptions() {
     return [
         {value: SEPARATOR_STYLES.DOT, title: '\u00b7'},
@@ -67,7 +44,6 @@ export function getSeparatorOptions() {
     ];
 }
 
-/* Font presets stay intentionally curated so panel rendering remains predictable across systems. */
 export function getFontPresetOptions() {
     return [
         {value: FONT_PRESETS.SYSTEM, title: 'System'},
@@ -78,7 +54,6 @@ export function getFontPresetOptions() {
     ];
 }
 
-/* Indicator rendering asks this helper for CSS fragments instead of knowing preset details. */
 export function getFontPresetStyle(fontPreset) {
     switch (fontPreset) {
     case FONT_PRESETS.MONOSPACE:
@@ -107,12 +82,10 @@ export function getFontPresetStyle(fontPreset) {
     }
 }
 
-/* Refresh interval options live here because they are UI-facing choices, not runtime scheduling policy itself. */
 export function getRefreshIntervalOptions() {
     return [60, 120, 300, 600, 900, 1800, 3600];
 }
 
-/* prefs uses this formatter so interval labels stay consistent anywhere they are presented. */
 export function formatRefreshIntervalLabel(seconds) {
     if (seconds < 60)
         return `${seconds} sec`;

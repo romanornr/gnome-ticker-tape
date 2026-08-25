@@ -12,15 +12,17 @@ GNOME Shell extension (GJS/ESM, Shell 49–50) showing market tickers in the top
 ## Architecture Canon
 
 - Catalog and settings symbols stay in historical Stooq-style form (`aapl.us`, `700.hk`, `eurusd`); providers translate at their boundary. Never change saved-symbol format — user gsettings contain it.
-- Non-crypto REST quotes come from CNBC's batch webservice (`services/providers/cnbc.js`); symbol grammar mapping lives in `services/providers/cnbc-symbols.js`. FX pairs are derived from the per-currency USD spot vector, never fetched per-pair.
-- `QuotesService` composes direct REST, Kraken, and Hyperliquid providers; live providers poll their REST fallback only while their websocket is down.
+- Non-crypto quotes come from CNBC batches; symbol grammar mapping lives in
+  `services/providers/cnbc-symbols.js`. FX pairs derive from the USD spot vector.
+- `QuotesService` composes direct REST, Kraken, and Hyperliquid providers. Each
+  live symbol keeps REST fallback until its first valid WebSocket quote.
 - Normalized quote shape everywhere past the provider boundary: `{price, quoteDate: 'YYYYMMDD', previousClose|null}` keyed by uppercase catalog symbol.
 - `AGENTS.md` holds the file map and data/API conventions; update it in the same change when key files are added, renamed, or removed.
 
 ## Understanding This Code
 
-Read the source. It is a small codebase with a file map in `AGENTS.md` and comments
-written to explain system role and boundaries, per `CODE_STYLE_GUIDE.md`.
+Read the source. It is a small codebase with a file map in `AGENTS.md`; comments
+are reserved for non-obvious boundaries and invariants per `CODE_STYLE_GUIDE.md`.
 
 Do not depend on a generated code-intelligence index to understand or change it. A
 pre-digested call graph answers "what calls this" but biases toward the shape the code

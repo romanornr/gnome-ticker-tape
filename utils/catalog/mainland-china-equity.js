@@ -1,6 +1,5 @@
-import {ASSET_CATEGORIES, withDefaultMarketSession} from '../asset-categories.js';
+import {ASSET_CATEGORIES} from '../asset-categories.js';
 
-/* This file is the curated mainland China equity suggestion source used by prefs search and mainland China cash-session defaults. */
 export const MAINLAND_CHINA_EQUITY_TICKERS = [
     {label: '600000', keywords: ['shanghai pudong development bank']},
     {label: '600004', keywords: ['guangzhou baiyun int airport']},
@@ -124,7 +123,7 @@ export const MAINLAND_CHINA_EQUITY_TICKERS = [
     {label: '601800', keywords: ['china communications construction']},
     {label: '601808', keywords: ['china oilfield services']},
     {label: '601818', keywords: ['china everbright bank']},
-].map(entry => withDefaultMarketSession({
+].map(entry => ({
     assetCategory: ASSET_CATEGORIES.EQUITY,
     label: entry.label,
     symbol: `${entry.label.toLowerCase()}.cn`,

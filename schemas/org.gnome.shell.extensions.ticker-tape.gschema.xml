@@ -11,11 +11,6 @@
       <summary>Base refresh interval</summary>
       <description>Default polling cadence in seconds before market-aware throttling is applied.</description>
     </key>
-    <key name="format-preset" type="s">
-      <default>'default'</default>
-      <summary>Display format preset</summary>
-      <description>Controls which parts of each ticker entry are shown by default.</description>
-    </key>
     <key name="show-price" type="b">
       <default>true</default>
       <summary>Show price text</summary>

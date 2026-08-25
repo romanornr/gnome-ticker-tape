@@ -1,13 +1,11 @@
 import {httpGetJson} from '../../http.js';
 
-export const KRAKEN_REST_TICKER_URL = 'https://api.kraken.com/0/public/Ticker';
+const KRAKEN_REST_TICKER_URL = 'https://api.kraken.com/0/public/Ticker';
 
-/* Kraken's REST Ticker endpoint accepts websocket pair names and echoes them back as result keys. */
-export function buildKrakenTickerUrl(liveSymbols) {
+function buildKrakenTickerUrl(liveSymbols) {
     return `${KRAKEN_REST_TICKER_URL}?pair=${liveSymbols.map(encodeURIComponent).join(',')}`;
 }
 
-/* The REST polling fallback fetches quotes for the same pair names the websocket subscription uses. */
 export async function fetchKrakenTickerQuotes(session, liveSymbols) {
     if (liveSymbols.length === 0) return new Map();
 
@@ -22,17 +20,22 @@ export async function fetchKrakenTickerQuotes(session, liveSymbols) {
  * previous close.
  */
 export function parseKrakenTickerQuotes(payload, timestamp = new Date().toISOString()) {
-    if (Array.isArray(payload?.error) && payload.error.length > 0)
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.error))
+        throw new Error('Kraken returned an invalid ticker response.');
+
+    if (payload.error.length > 0)
         throw new Error(`Kraken ticker request failed: ${payload.error.join(', ')}`);
+    if (!payload.result || typeof payload.result !== 'object' || Array.isArray(payload.result))
+        throw new Error('Kraken returned an invalid ticker response.');
 
     const quoteDate = normalizeKrakenTimestampDate(timestamp);
     const quotesByPair = new Map();
 
-    Object.entries(payload?.result ?? {}).forEach(([pair, entry]) => {
+    Object.entries(payload.result).forEach(([pair, entry]) => {
         const price = Number.parseFloat(`${entry?.c?.[0] ?? ''}`);
         const open = Number.parseFloat(`${entry?.o ?? ''}`);
 
-        if (!Number.isFinite(price) || quoteDate === '') return;
+        if (!Number.isFinite(price) || price <= 0 || quoteDate === '') return;
 
         quotesByPair.set(pair, {
             price,
@@ -44,19 +47,17 @@ export function parseKrakenTickerQuotes(payload, timestamp = new Date().toISOStr
     return quotesByPair;
 }
 
-/* Provider quote objects are normalized here so Kraken transport code stays focused on websocket mechanics. */
 export function createKrakenQuote(entry) {
     const price = Number.parseFloat(`${entry?.last ?? ''}`);
     const quoteDate = normalizeKrakenTimestampDate(entry?.timestamp ?? '');
     const change = Number.parseFloat(`${entry?.change ?? ''}`);
     const changePct = Number.parseFloat(`${entry?.change_pct ?? ''}`);
 
-    if (!Number.isFinite(price) || quoteDate === '') return null;
+    if (!Number.isFinite(price) || price <= 0 || quoteDate === '') return null;
 
     return {price, quoteDate, previousClose: deriveKrakenPreviousClose(price, change, changePct)};
 }
 
-/* Kraken can derive previous close from either absolute change or percent change. */
 function deriveKrakenPreviousClose(price, change, changePct) {
     if (Number.isFinite(change)) {
         const previousClose = price - change;
@@ -71,7 +72,6 @@ function deriveKrakenPreviousClose(price, change, changePct) {
     return null;
 }
 
-/* Kraken timestamps are normalized to the shared YYYYMMDD quote-date shape here. */
 function normalizeKrakenTimestampDate(timestampText) {
     const normalized = timestampText.slice(0, 10).replaceAll('-', '');
     return /^\d{8}$/.test(normalized) ? normalized : '';

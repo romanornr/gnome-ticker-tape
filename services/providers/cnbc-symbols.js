@@ -1,8 +1,7 @@
 /*
  * Catalog symbols keep their historical Stooq-style form ("aapl.us", "abn.nl",
  * "700.hk") because saved user settings already contain them. This module owns
- * the translation of that canonical form into CNBC's symbol grammar so the
- * provider and prefs verification share one mapping.
+ * the translation of that canonical form into CNBC's symbol grammar.
  */
 
 /* Futures use CNBC's front-month "@XX.1" grammar with legacy pit codes, indices use ".XXX"; each entry live-verified. */

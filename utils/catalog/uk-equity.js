@@ -1,6 +1,5 @@
-import {ASSET_CATEGORIES, withDefaultMarketSession} from '../asset-categories.js';
+import {ASSET_CATEGORIES} from '../asset-categories.js';
 
-/* This file is the curated U.K. equity suggestion source used by prefs search and U.K. cash-session defaults. */
 export const UK_EQUITY_TICKERS = [
     {label: 'AAF', keywords: ['airtel africa']},
     {label: 'AAL', keywords: ['anglo american']},
@@ -102,7 +101,7 @@ export const UK_EQUITY_TICKERS = [
     {label: 'WIZZ', keywords: ['wizz air']},
     {label: 'WPP', keywords: ['wpp']},
     {label: 'WTB', keywords: ['whitbread']},
-].map(entry => withDefaultMarketSession({
+].map(entry => ({
     assetCategory: ASSET_CATEGORIES.EQUITY,
     label: entry.label,
     symbol: `${entry.label.toLowerCase()}.uk`,

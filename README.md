@@ -6,7 +6,7 @@
 
 <strong>Market prices in the GNOME top bar.</strong>
 
-<em>Stocks, ETFs, indices, forex, commodities and live crypto, across ten exchanges.</em>
+<em>Stocks, ETFs, indices, forex, commodities, and live crypto across ten exchanges.</em>
 
 <br />
 <br />
@@ -18,333 +18,172 @@
 
 </div>
 
-<!-- Add a screenshot of the indicator in the top bar, then remove these comment markers:
-<p align="center"><img src="screenshot.png" alt="The Ticker Tape indicator in the GNOME top bar" width="720"></p>
--->
+## Features
 
----
+Ticker Tape supports stocks, ETFs, indices, forex, commodities, Kraken spot
+markets, and Hyperliquid perpetual futures without an API key.
 
-## What this extension does
+Non-crypto prices use a configurable polling interval and slow down or pause
+according to their market schedule. Crypto prices use one WebSocket connection
+per provider, with REST fallback on the normal polling cadence. Tickers can be
+placed independently on the left or right side of the panel.
 
-Ticker Tape shows market prices in the GNOME top bar.
-It supports stocks, ETFs, indices, forex, commodities and crypto.
-It covers ten exchanges in the US, Europe and Asia.
-It does not need an API key.
-
-The extension polls a non-crypto ticker at the refresh interval.
-It polls less frequently when the market of that ticker is closed.
-A crypto ticker uses a WebSocket connection for live updates.
-
-> [!NOTE]
-> The extension needs GNOME Shell 49 or 50.
-> The UUID is `ticker-tape@romanornr`.
-
----
+The extension requires GNOME Shell 49 or 50. Its UUID is
+`ticker-tape@romanornr`.
 
 ## Install
 
-Use one of these commands:
-
 | Command | Result |
 |---|---|
-| `./install.sh` | Installs a copy of the extension. |
-| `./install-dev.sh` | Installs a symbolic link for development. |
-| `./remove.sh` | Removes the installed files. |
+| `./install.sh` | Install a copy of the extension. |
+| `./install-dev.sh` | Install a symbolic link for development. |
+| `./remove.sh` | Remove the installed extension. |
 
-GNOME Shell reads a new extension only after it starts again.
-Log out and log in again on Wayland and on GNOME Shell 50.
-Only GNOME Shell 49 on Xorg supports pressing `Alt+F2`, typing `r` and
-pressing Enter to reload the shell in place.
+GNOME Shell must restart before it sees a new extension. Log out and back in on
+Wayland and GNOME Shell 50. On GNOME Shell 49 under Xorg, press `Alt+F2`, enter
+`r`, and press Enter.
 
----
-
-## Default tickers
-
-The extension includes these tickers:
+## Default Tickers
 
 | Label | Symbol | Category | Panel side |
 |---|---|---|---|
-| SPX | `^spx` | US equity | Right |
-| NDX | `^ndq` | US equity | Right |
+| SPX | `^spx` | U.S. equity | Right |
+| NDX | `^ndq` | U.S. equity | Right |
 | DXY | `dx.f` | FX | Left |
 | EUR/USD | `eurusd` | FX | Left |
 | Gold | `xauusd` | Commodity | Right |
-| USO | `uso.us` | US ETF | Right |
+| USO | `uso.us` | U.S. ETF | Right |
 | ETH | `ethusd` | Crypto (Kraken) | Right |
 | BTC | `btcusd` | Crypto (Kraken) | Right |
 
-DXY and EUR/USD show on the left side of the panel.
-The other tickers show on the right side.
-The two crypto tickers use Kraken.
-Select Hyperliquid for one crypto ticker with the `Crypto API` option.
-Change any of these values in the extension preferences.
+## Add Or Edit A Ticker
 
----
+1. Open the extension preferences and click **Add ticker**.
+2. Choose the asset category.
+3. Search the catalog by label, symbol, or a focused keyword.
+4. Select a result, then choose decimals and panel side.
+5. For crypto, choose Kraken or Hyperliquid before selecting a market.
+6. Save.
 
-## Add a ticker
+The chosen catalog entry supplies the symbol, category, and market-session
+policy. Those values are not independently editable, preventing combinations
+that the providers cannot serve.
 
-1. Open the extension preferences.
-2. Click `+ Add ticker`.
-3. Search the catalog by label, by symbol or by category.
+Kraken markets are discovered from its WebSocket instrument catalog and contain
+spot pairs such as `SOL/USD`. Hyperliquid markets come from its metadata API and
+contain perpetual futures such as `BTC`.
 
-Category search terms include `energy`, `metals`, `forex` and `crypto`.
-Symbol examples include `QQQ`, `Gold`, `EUR/USD`, `SOL/USD`, `BTC/USD` and `USO`.
+## Markets And Providers
 
-For a crypto ticker:
+| Category | Session behavior |
+|---|---|
+| U.S. equities and ETFs | U.S. extended-hours schedule |
+| International equities | Local exchange schedule |
+| Commodities | Weekday schedule, or U.S. schedule for U.S.-listed funds |
+| FX | Weekday schedule |
+| Crypto | Always open |
 
-- The `Crypto API` option selects Kraken or Hyperliquid.
-- The extension reads the Kraken markets from the Kraken WebSocket.
-  Search for `SOL`, `SOLUSD` or `SOL/USD`.
-- The extension reads the Hyperliquid markets from the Hyperliquid metadata endpoints.
-  Search for a perp such as `BTC`.
-
-The `Verify` button requests a live quote for a non-crypto ticker.
-Use it before you save the ticker.
-A crypto ticker has no `Verify` button.
-The Save operation validates a crypto ticker against the provider catalog.
-
----
-
-## Supported markets
-
-| Category | Description | Trading session |
-|---|---|---|
-| **U.S. equities** | Stocks and major U.S. equity indexes | U.S. session |
-| **International equities** | Mainland China, Germany, Hong Kong, Japan, Netherlands and UK stocks | Local market session |
-| **U.S. ETFs** | Exchange-traded funds | U.S. session |
-| **Commodities** | Metals, energy markets and exchange-listed funds | Weekday session, or U.S. session for a U.S.-listed fund |
-| **FX** | Forex pairs and currency products such as DXY | Weekday session |
-| **Crypto** | Spot and perpetual crypto markets | Always open |
-
----
-
-## Crypto exchanges
+CNBC is the primary batched REST source for non-crypto quotes. Nasdaq is a
+narrow fallback for missed U.S. listings, and open.er-api.com supplies an FX
+rate-table fallback. Saved catalog symbols retain their historical form while
+`services/providers/cnbc-symbols.js` translates them for CNBC.
 
 | Feature | Kraken | Hyperliquid |
 |---|---|---|
-| **Markets** | Spot pairs | Perps and spot pairs |
-| **Live transport** | WebSocket v2 | WebSocket |
-| **REST fallback** | Ticker endpoint | Market snapshots |
-| **Catalog source** | Instrument metadata | Spot and perp metadata endpoints |
-| **Search examples** | `SOL`, `SOLUSD`, `SOL/USD` | `BTC`, `ETH`, `ETH/USDC` |
-| **Connection model** | One socket, batch subscribe | One socket, subscribe per symbol |
+| Markets | Spot pairs | Perpetual futures |
+| Live transport | WebSocket v2 | WebSocket |
+| REST fallback | Ticker endpoint | Market snapshot |
+| Catalog source | Instrument metadata | Perpetual-market metadata |
+| Connection model | One batched socket | One socket, subscription per market |
 
-Each provider keeps one WebSocket connection for all of its crypto tickers.
-It does not open one connection for each ticker.
-If the connection stops, the provider polls the REST endpoint at the refresh interval.
-The provider also tries to connect again.
+A subscription acknowledgement does not disable REST fallback. A provider is
+considered live only after a valid quote arrives.
 
----
+## Display Settings
 
-## Display settings
+Three independent switches control whether each ticker shows its price,
+direction arrow, and percentage change. Preferences also control the separator
+between entries and the polling interval. The default interval is five minutes.
 
-The preferences window has these display options:
+## Developer Layout
 
-| Option | Result |
-|---|---|
-| **Format preset** | Selects which parts of a ticker show. |
-| **Show price**, **Show arrow**, **Show percent** | Each one shows or hides one part. |
-| **Separator style** | Sets the character between two tickers. The default is a dot. |
-| **Refresh interval** | Sets how frequently the extension polls quotes. The default is 5 minutes. |
+- `extension.js` owns Shell lifecycle, settings, and panel indicators.
+- `prefs.js` and `utils/prefs/` own the catalog-based preferences UI.
+- `services/quotes.js` composes providers, `QuoteStore`, and entry updates.
+- `services/quote-update-scheduler.js` owns polling and display timers.
+- `services/providers/` owns REST and WebSocket transports.
+- `utils/crypto-providers/kraken/` and `hyperliquid/` own provider-specific
+  symbols, catalogs, and quote normalization.
+- `utils/catalog/` contains the curated non-crypto catalog.
 
-The extension polls less frequently when a market is closed.
+Shell UI code and preferences UI code run in separate processes. Shared modules
+must not import either process's UI libraries.
 
----
+## Edit The Curated Catalog
 
-## Manage the extension
+Each non-crypto category has a file under `utils/catalog/`. Before changing a
+symbol, verify it against CNBC using a custom user agent. CNBC rejects several
+well-known tool user agents.
 
-Open this page after you install the extension:
+```bash
+curl -A 'test/1.0' 'https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=AAPL&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json&events=1'
+```
 
-- `https://extensions.gnome.org/local/`
+Keep catalog rows alphabetized by label. Use compact keywords relevant to the
+asset, and let the category/symbol policy derive the market session. Do not add
+static crypto rows; the selected provider supplies its catalog at runtime.
 
-The page shows the extensions that GNOME Shell reads for your session.
-On the page you can enable, disable or remove the extension.
+## Checks And Packaging
 
-Use the page when you do not have this repository on the disk.
-Also use it when you do not want to run `./remove.sh`.
-
-> [!NOTE]
-> The page needs the GNOME Shell Integration browser add-on.
-> Without the add-on, the website cannot control a local extension.
-
-The puzzle image on this page does not mean that the repository logo is
-broken. The local page requests extension details and artwork from the public
-extensions.gnome.org listing; it does not read `icon.png` from the installed
-extension. Until this UUID has an active public listing, the puzzle is the
-expected fallback.
-
-After the first submission is editable, the extension owner uploads
-`icon.png` by clicking the puzzle image on that listing. The existing PNG is
-the 512×512 raster artwork intended for that upload. `icon.svg` remains the
-README source image; SVG is not an accepted listing-icon format. Neither image
-belongs in the installed extension ZIP.
-
----
-
-## Provider layout
-
-This section is for developers.
-
-The crypto provider code has two layers:
-
-- `utils/crypto-providers/` holds the provider semantics.
-  These are symbol normalization, catalog load, search score and quote normalization.
-- `services/providers/` holds the runtime transport, the provider ownership and the refresh order.
-
-`utils/crypto-providers/index.js` composes the adapter objects.
-The preferences code and the runtime code both use these adapters.
-Each provider keeps its own files:
-
-- `utils/crypto-providers/kraken/`
-- `utils/crypto-providers/hyperliquid/`
-
----
-
-## Edit the catalog
-
-One file holds the tickers of one market:
-
-- [utils/catalog/us-equity.js](utils/catalog/us-equity.js)
-- [utils/catalog/us-etf.js](utils/catalog/us-etf.js)
-- [utils/catalog/commodity.js](utils/catalog/commodity.js)
-- [utils/catalog/fx.js](utils/catalog/fx.js)
-- [utils/catalog/crypto.js](utils/catalog/crypto.js)
-
-The crypto file holds a small static list for offline use.
-At runtime the live providers supply the full crypto catalog.
-
-[utils/asset-categories.js](utils/asset-categories.js) holds the category labels,
-the market-session policy and the category search terms.
-
-To add a ticker to the catalog:
-
-1. Verify the provider symbol first. This step does not apply to a crypto ticker.
-2. Add one compact record to the file of its asset category.
-3. Keep the label order of that file.
-4. Let the mapper of the file supply the shared values.
-   The market session derives centrally from the symbol suffix or from the category.
-5. For an equity or an ETF, the symbol derives from the lowercase label plus the market suffix.
-   Keep a verified exception explicit. `us-equity.js` does this for `BRK.B`, `NDX` and `SPX`.
-6. Keep a commodity symbol explicit.
-   Add `priceDecimals` only where the mapper of that file permits a row value.
-7. Add a small number of `keywords`. The catalog search then finds the ticker more easily.
-
-> [!WARNING]
-> Do not add a crypto ticker to the static catalog.
-> The selected live provider supplies the crypto markets at runtime.
-
----
-
-## Run the local checks
-
-Install the pinned developer dependencies once after cloning or after the
-lockfile changes:
+Install the pinned development dependencies once:
 
 ```bash
 npm ci
 ```
 
-Then one command runs the local safety net:
+Run the complete local check:
 
 ```bash
 ./check.sh
 ```
 
-The command runs these checks:
+It runs ESLint, the behavior-oriented GJS tests, builds the release archive, and
+compares its production inventory with the source tree. The tests cover market
+schedules, current ticker settings, presentation, REST normalization/fallbacks,
+live-provider lifecycle, and quote-service behavior.
 
-- ESLint with the GNOME JavaScript rules and the repository's documented style overrides
-- the behavior-oriented GJS suites through `gjs -m tests/run.js`
-- creation and ZIP integrity of the distributable extension
-- an exact comparison between the production source inventory and the ZIP contents
-
-The GJS tests cover the boundaries where several helpers compose into visible
-or persisted behavior:
-
-- the market schedule policy
-- loading, error, fresh, stale and price-flash presentation
-- REST fallback and normalized provider output
-- the live WebSocket lifecycle and provider routing
-- QuotesService refresh, settings and logging behavior
-- saved ticker migration and dialog-to-config behavior
-
-Prefer extending one of these composed scenarios to adding a test for every
-small helper. A separate unit test is useful only when a helper owns policy or
-an edge case that cannot be observed clearly through a higher-level output.
-
-To exercise the actual packaged extension in an isolated, headless Shell
-session, run:
+Run the packaged Shell lifecycle smoke test where its GNOME runtime dependencies
+are available:
 
 ```bash
 ./check-shell.sh
 ```
 
-The smoke test installs the ZIP, verifies both panel indicators, disables the
-extension, and enables it again. Run it on both a GNOME Shell 49 and a GNOME
-Shell 50 development environment before release.
+It installs the archive in an isolated session and checks enable, disable, and
+enable again. Build only the release archive with `./pack.sh`; the default output
+is `dist/ticker-tape@romanornr.shell-extension.zip`.
 
-Create the release ZIP without running the full check suite with:
+After a structural change, also test in a real GNOME session:
 
-```bash
-./pack.sh
-```
+- enable, disable, and enable the extension without errors;
+- add, edit, remove, reorder, and reset tickers;
+- render left and right entries, including the same symbol on both sides;
+- receive one Kraken and one Hyperliquid live update;
+- retain cached prices after changing the ticker list;
+- flash once after a price change and then return to the normal color.
 
-By default this writes
-`dist/ticker-tape@romanornr.shell-extension.zip`. Pass one output directory as
-an argument to write it elsewhere.
-
----
-
-## Test after a refactor
-
-Do this end-to-end pass after a structural change.
-Do it before you start more feature work.
-
-1. Run `./check.sh`.
-2. Install the current tree.
-   Run `./install-dev.sh` for development, or `./install.sh` for a copy.
-3. The install script can report that GNOME Shell does not read the extension yet.
-   Log out and back in on Wayland and on GNOME Shell 50.
-   On GNOME Shell 49 with Xorg, press `Alt+F2`, type `r` and press Enter.
-4. Start a log in a second terminal:
+Follow Shell logs with:
 
 ```bash
 journalctl --user -f /usr/bin/gnome-shell
 ```
 
-5. Open the extension preferences. Then confirm each item of this checklist:
-   - The extension enables and disables without an error.
-   - The indicator shows in the panel.
-   - A left-panel ticker stays on the left. A right-panel ticker stays on the right.
-   - The panel shows a placeholder at startup, before the first quote arrives.
-   - `Verify` still works for a non-crypto catalog entry.
-   - Add, edit, remove, reorder and reset-to-defaults each persist correctly.
-   - A change of `Crypto API` changes the searchable markets and the Save validation.
-   - A Kraken ticker and a Hyperliquid ticker each receive live updates.
-   - A price change flashes one time. The color then returns to the default color.
-6. If you find a runtime problem, add a temporary focused diagnostic near the
-   related provider, orchestrator or preferences path. Remove high-frequency
-   diagnostics after the problem is understood so normal refreshes do not
-   flood the journal.
+## Guides
 
-`gnome-extensions info ticker-tape@romanornr` can return no data.
-`gnome-extensions show ticker-tape@romanornr` can also return no data.
-Then the extension is not installed, or the active session cannot read it.
-Install the extension first. Then do the checklist again in the real GNOME session.
-
----
-
-## Developer guides
-
-- [DEBUGGING_GUIDE.md](DEBUGGING_GUIDE.md) tells you how to debug the extension behavior and the API parse steps.
-- [CODE_STYLE_GUIDE.md](CODE_STYLE_GUIDE.md) gives the comment rules and the code style rules.
-- [AGENTS.md](AGENTS.md) holds the file map and the data conventions.
-
----
+- [DEBUGGING_GUIDE.md](DEBUGGING_GUIDE.md) covers runtime/provider diagnosis.
+- [CODE_STYLE_GUIDE.md](CODE_STYLE_GUIDE.md) defines repository code style.
+- [AGENTS.md](AGENTS.md) maps current files and data conventions.
 
 ## License
 
-Ticker Tape uses the GPL-2.0-or-later license. See [LICENSE](LICENSE).
-
-GNOME Shell also uses the GPL-2.0-or-later license.
-An extension runs in the GNOME Shell process.
-Thus an extension must use compatible terms.
+Ticker Tape is licensed under GPL-2.0-or-later. See [LICENSE](LICENSE).

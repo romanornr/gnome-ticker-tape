@@ -1,132 +1,96 @@
-import {ASSET_CATEGORIES, CRYPTO_PROVIDERS, getTickerMarketSessionPolicy} from '../utils/asset-categories.js';
-import {MARKET_SESSION_IDS} from '../utils/market-sessions.js';
 import {
-    buildTickerConfig,
-    getCatalogMatches,
-    resolveSelectedCryptoTicker,
-    validateTickerDraft,
-} from '../utils/prefs/ticker-dialog-state.js';
-import {DEFAULT_TICKERS, loadTickerConfigs} from '../utils/settings.js';
-import {getCuratedTickersForCategory} from '../utils/ticker-catalog.js';
-import {serializeTickerConfig} from '../utils/ticker-config.js';
-import {TickerDialogController} from '../utils/prefs/ticker-dialog-controller.js';
-import {assertDeepEqual, assertEqual} from './support/assert.js';
+    ASSET_CATEGORIES,
+    CRYPTO_PROVIDERS,
+    getTickerMarketSessionId,
+} from '../utils/asset-categories.js';
+import {HyperliquidProvider} from '../services/providers/hyperliquid-live.js';
+import {KrakenProvider} from '../services/providers/kraken-live.js';
+import {restProvider} from '../services/providers/rest-quotes.js';
+import {MARKET_SESSION_IDS} from '../utils/market-sessions.js';
+import {matchCuratedTickers} from '../utils/ticker-catalog.js';
+import {normalizeTickerConfig, serializeTickerConfig} from '../utils/ticker-config.js';
+import {assertDeepEqual} from './support/assert.js';
 
-const fakeSettings = serialized => ({get_string: () => serialized});
+export function runTests() {
+    testCurrentConfigAndSessions();
+    testSearchAndProviderIsolation();
+}
 
-export async function runTests() {
-    const legacyCases = [
-        [{symbol: 'btc.v', marketType: 'always-open', liveSymbol: 'BTC/USD'}, ASSET_CATEGORIES.CRYPTO, MARKET_SESSION_IDS.ALWAYS_OPEN],
-        [{symbol: 'btcusd', marketType: 'always_open'}, ASSET_CATEGORIES.CRYPTO, MARKET_SESSION_IDS.ALWAYS_OPEN],
-        [{symbol: 'eurusd', marketType: 'weekday-session'}, ASSET_CATEGORIES.FX, MARKET_SESSION_IDS.WEEKDAY_24H],
-        [{symbol: 'eurusd', marketType: 'weekday_session'}, ASSET_CATEGORIES.FX, MARKET_SESSION_IDS.WEEKDAY_24H],
-        [{symbol: 'aapl.us', marketType: 'us-session'}, ASSET_CATEGORIES.EQUITY, MARKET_SESSION_IDS.US_EQUITY_EXTENDED],
-        [{symbol: 'aapl.us', marketType: 'us_session'}, ASSET_CATEGORIES.EQUITY, MARKET_SESSION_IDS.US_EQUITY_EXTENDED],
-        [{symbol: 'legacy.us', assetCategory: 'us-equity'}, ASSET_CATEGORIES.EQUITY, MARKET_SESSION_IDS.US_EQUITY_EXTENDED],
-        [{symbol: 'legacy.us', assetCategory: 'us_equity'}, ASSET_CATEGORIES.EQUITY, MARKET_SESSION_IDS.US_EQUITY_EXTENDED],
-        [{symbol: 'legacy.us', assetCategory: 'us-etf'}, ASSET_CATEGORIES.ETF, MARKET_SESSION_IDS.US_EQUITY_EXTENDED],
-        [{symbol: 'legacy.us', assetCategory: 'us_etf'}, ASSET_CATEGORIES.ETF, MARKET_SESSION_IDS.US_EQUITY_EXTENDED],
-        [{symbol: 'gld.us', assetCategory: ASSET_CATEGORIES.COMMODITY, marketSessionId: MARKET_SESSION_IDS.WEEKDAY_24H}, ASSET_CATEGORIES.COMMODITY, MARKET_SESSION_IDS.US_EQUITY_EXTENDED],
-        [{symbol: 'asml.nl', assetCategory: ASSET_CATEGORIES.EQUITY}, ASSET_CATEGORIES.EQUITY, MARKET_SESSION_IDS.EUROPE_EQUITY_CASH],
+function testCurrentConfigAndSessions() {
+    const cases = [
+        [ticker('ASML', 'asml.nl', ASSET_CATEGORIES.EQUITY), MARKET_SESSION_IDS.EUROPE_EQUITY_CASH],
+        [ticker('USO', 'uso.us', ASSET_CATEGORIES.COMMODITY), MARKET_SESSION_IDS.US_EQUITY_EXTENDED],
+        [ticker('Gold', 'xauusd', ASSET_CATEGORIES.COMMODITY), MARKET_SESSION_IDS.WEEKDAY_24H],
+        [ticker('EUR/USD', 'eurusd', ASSET_CATEGORIES.FX), MARKET_SESSION_IDS.WEEKDAY_24H],
+        [{
+            ...ticker('BTC', 'btcusd', ASSET_CATEGORIES.CRYPTO),
+            cryptoProvider: CRYPTO_PROVIDERS.KRAKEN,
+            liveSymbol: ' BTC/USD ',
+        }, MARKET_SESSION_IDS.ALWAYS_OPEN],
     ];
 
-    assertDeepEqual(legacyCases.map(([rawTicker]) => {
-        const ticker = loadTickerConfigs(fakeSettings(JSON.stringify([{label: 'Saved', ...rawTicker}])))[0];
-        const serialized = serializeTickerConfig(ticker);
-        return [ticker.assetCategory, ticker.marketSessionId, serialized.marketSessionId];
-    }), legacyCases.map(([, assetCategory, marketSessionId]) => [assetCategory, marketSessionId, marketSessionId]),
-    'Supported persisted aliases should normalize and serialize through one stable boundary');
-
-    const originalLogError = globalThis.logError;
-    globalThis.logError = () => {};
-    let settingsFallbacks;
-    try {
-        settingsFallbacks = [
-            loadTickerConfigs(fakeSettings('[]')).length,
-            loadTickerConfigs(fakeSettings('')).length > 0,
-            loadTickerConfigs(fakeSettings('not json')).length > 0,
-            loadTickerConfigs(fakeSettings('[{"label":""}]')).length > 0,
+    assertDeepEqual(cases.map(([raw, expectedSession]) => {
+        const normalized = normalizeTickerConfig({...raw, marketSessionId: 'ignored'});
+        return [
+            normalized.marketSessionId,
+            getTickerMarketSessionId(normalized),
+            Object.hasOwn(serializeTickerConfig(normalized), 'marketSessionId'),
+            expectedSession,
         ];
-    } finally {
-        globalThis.logError = originalLogError;
-    }
-    assertDeepEqual(settingsFallbacks, [0, true, true, true],
-        'An explicit empty list should remain empty while missing or invalid settings restore defaults');
+    }), cases.map(([, expected]) => [expected, expected, false, expected]),
+    'Current ticker config should derive exchange sessions and omit them from persistence');
+}
 
-    const curatedTickers = Object.values(ASSET_CATEGORIES).flatMap(getCuratedTickersForCategory);
-    assertEqual([...curatedTickers, ...DEFAULT_TICKERS].every(ticker =>
-        ticker.marketSessionId === getTickerMarketSessionPolicy(ticker).defaultMarketSessionId), true,
-    'Curated and default tickers should materialize the shared session policy');
+function testSearchAndProviderIsolation() {
+    const cryptoCatalog = [
+        cryptoCatalogEntry('BTC/USD', 'btcusd', CRYPTO_PROVIDERS.KRAKEN),
+        cryptoCatalogEntry('BTC Perp', 'btc', CRYPTO_PROVIDERS.HYPERLIQUID),
+    ];
+    const kraken = provider(KrakenProvider);
+    const hyperliquid = provider(HyperliquidProvider);
+    const krakenTicker = cryptoCatalog[0];
+    const hyperliquidTicker = cryptoCatalog[1];
 
-    const cryptoCatalog = [{
-        label: 'BTC/USD', symbol: 'btcusd', liveSymbol: 'BTC/USD',
-        priceDecimals: 0, assetCategory: ASSET_CATEGORIES.CRYPTO,
-        marketSessionId: MARKET_SESSION_IDS.ALWAYS_OPEN, cryptoProvider: CRYPTO_PROVIDERS.KRAKEN,
-    }];
-    const resolvedTicker = resolveSelectedCryptoTicker({
-        assetCategory: ASSET_CATEGORIES.CRYPTO,
-        cryptoCatalog,
-        cryptoProvider: CRYPTO_PROVIDERS.KRAKEN,
-        labelText: '',
-        symbolText: 'BTC/USD',
-    });
-    const catalogMatches = getCatalogMatches(ASSET_CATEGORIES.CRYPTO, 'BTC', cryptoCatalog, CRYPTO_PROVIDERS.KRAKEN);
     assertDeepEqual({
-        resolvedSymbol: resolvedTicker.liveSymbol,
-        matchCount: catalogMatches.length,
-        validMessage: validateTickerDraft('', 'BTC/USD', {
-            assetCategory: ASSET_CATEGORIES.CRYPTO,
+        legacyAccepted: normalizeTickerConfig(ticker('Old', 'old.us', 'us-equity')) !== null,
+        descriptionMatches: matchCuratedTickers(ASSET_CATEGORIES.EQUITY, 'individual stocks').length,
+        krakenMatches: matchCuratedTickers(ASSET_CATEGORIES.CRYPTO, 'btc', {
+            cryptoCatalog,
             cryptoProvider: CRYPTO_PROVIDERS.KRAKEN,
-            resolvedCryptoTicker: resolvedTicker,
-            hasCryptoCatalogMatches: true,
-        }),
-        invalidMessage: validateTickerDraft('', 'UNKNOWN/USD', {
-            assetCategory: ASSET_CATEGORIES.CRYPTO,
-            cryptoProvider: CRYPTO_PROVIDERS.KRAKEN,
-            resolvedCryptoTicker: null,
-            hasCryptoCatalogMatches: false,
-        }),
+        }).map(entry => entry.cryptoProvider),
+        hyperliquidMatches: matchCuratedTickers(ASSET_CATEGORIES.CRYPTO, 'btc', {
+            cryptoCatalog,
+            cryptoProvider: CRYPTO_PROVIDERS.HYPERLIQUID,
+        }).map(entry => entry.cryptoProvider),
+        ownership: [
+            restProvider.ownsTicker(ticker('AAPL', 'aapl.us', ASSET_CATEGORIES.EQUITY)),
+            restProvider.ownsTicker(krakenTicker),
+            kraken.ownsTicker(krakenTicker),
+            kraken.ownsTicker(hyperliquidTicker),
+            hyperliquid.ownsTicker(hyperliquidTicker),
+        ],
     }, {
-        resolvedSymbol: 'BTC/USD',
-        matchCount: 1,
-        validMessage: '',
-        invalidMessage: 'Choose a Kraken-supported crypto pair.',
-    }, 'Crypto dialog state should resolve supported markets and reject unknown ones');
+        legacyAccepted: false,
+        descriptionMatches: 0,
+        krakenMatches: [CRYPTO_PROVIDERS.KRAKEN],
+        hyperliquidMatches: [CRYPTO_PROVIDERS.HYPERLIQUID],
+        ownership: [true, false, true, false, true],
+    }, 'Search and runtime providers should isolate crypto catalogs by provider');
+}
 
-    assertDeepEqual(Object.entries(buildTickerConfig({
-        initialTicker: {},
-        labelText: '',
-        symbolText: 'BTC/USD',
-        priceDecimals: 0,
-        panelSide: 'right',
-        assetCategory: ASSET_CATEGORIES.CRYPTO,
-        marketSessionId: MARKET_SESSION_IDS.ALWAYS_OPEN,
-        cryptoProvider: CRYPTO_PROVIDERS.KRAKEN,
-        resolvedCryptoTicker: resolvedTicker,
-        cryptoCatalog,
-    })).sort(), Object.entries({...cryptoCatalog[0], panelSide: 'right'}).sort(),
-    'A validated dialog draft should produce the complete saved ticker config');
+function ticker(label, symbol, assetCategory) {
+    return {label, symbol, assetCategory, priceDecimals: 2, panelSide: 'right'};
+}
 
-    const deferredVerification = Promise.withResolvers();
-    const verificationMessages = [];
-    const controller = Object.assign(Object.create(TickerDialogController.prototype), {
-        activeAssetCategory: ASSET_CATEGORIES.EQUITY, lastVerifiedSymbol: '',
-        verificationRequestId: 0, verifyInProgress: false,
-        symbolValueLabel: {label: 'aapl.us'},
-        verifySymbol: () => deferredVerification.promise,
-        _setVerificationMessage: message => verificationMessages.push(message),
-        _updateSaveSensitivity() {},
-        _updateVerifyButtonSensitivity() {},
-    });
-    const verificationRequest = controller._runSymbolVerification();
-    controller.symbolValueLabel.label = 'msft.us';
-    controller._handleSymbolTextChanged();
-    deferredVerification.resolve({symbol: 'aapl.us', quoteDate: '2026-08-25'});
-    await verificationRequest;
-    assertDeepEqual([
-        controller.verificationRequestId,
-        controller.verifyInProgress,
-        controller.lastVerifiedSymbol,
-        verificationMessages.at(-1),
-    ], [2, false, '', ''], 'A stale verification response should not update an edited symbol');
+function cryptoCatalogEntry(label, symbol, cryptoProvider) {
+    return {
+        ...ticker(label, symbol, ASSET_CATEGORIES.CRYPTO),
+        cryptoProvider,
+        liveSymbol: cryptoProvider === CRYPTO_PROVIDERS.KRAKEN ? 'BTC/USD' : 'BTC',
+        keywords: ['bitcoin'],
+    };
+}
+
+function provider(Provider) {
+    return new Provider({uuid: 'test', onQuotes() {}, onStale() {}});
 }

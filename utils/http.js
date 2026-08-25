@@ -2,14 +2,10 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
-/*
- * Shared timeout-guarded Soup transport turns GJS callback APIs into promises.
- * Providers supply only the HTTP method, endpoint, body/headers, and timeout wording.
- */
+/* Shared timeout-guarded Soup transport for every REST provider. */
 
 export const DEFAULT_HTTP_TIMEOUT_SECONDS = 12;
 
-/* Every helper funnels through this timeout-guarded core so no request can hang a refresh pass forever. */
 async function requestBytes(session, message, {timeoutSeconds = DEFAULT_HTTP_TIMEOUT_SECONDS, timeoutMessage = null, headers = null} = {}) {
     if (headers) {
         const requestHeaders = message.get_request_headers();
@@ -28,7 +24,12 @@ async function requestBytes(session, message, {timeoutSeconds = DEFAULT_HTTP_TIM
     );
 
     try {
-        return await sendAndRead(session, message, cancellable);
+        const bytes = await sendAndRead(session, message, cancellable);
+        const status = message.get_status();
+        if (status < 200 || status >= 300)
+            throw new Error(`HTTP ${status} while loading ${message.get_uri().to_string()}.`);
+
+        return bytes;
     } catch (error) {
         if (cancellable.is_cancelled())
             throw new Error(timeoutMessage ?? `Timed out after ${timeoutSeconds}s while loading ${message.get_uri().to_string()}.`);
@@ -40,13 +41,11 @@ async function requestBytes(session, message, {timeoutSeconds = DEFAULT_HTTP_TIM
     }
 }
 
-/* JSON GET endpoints (CNBC, Kraken REST) parse the body directly so callers only see decoded payloads. */
 export async function httpGetJson(session, url, options = {}) {
     const bytes = await requestBytes(session, Soup.Message.new('GET', url), options);
     return JSON.parse(new TextDecoder().decode(bytes.get_data()));
 }
 
-/* JSON POST endpoints (Hyperliquid info API) share the same transport core as the GET helpers. */
 export async function httpPostJson(session, url, body, options = {}) {
     const message = Soup.Message.new('POST', url);
     message.get_request_headers().append('Content-Type', 'application/json');

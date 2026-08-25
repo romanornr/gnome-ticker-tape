@@ -9,7 +9,6 @@ import {KrakenProvider} from './providers/kraken-live.js';
 import {restProvider} from './providers/rest-quotes.js';
 import {createLoadingEntries} from '../utils/format.js';
 import {
-    loadDisplaySettings,
     loadRefreshIntervalSeconds,
     loadTickerConfigs,
     SETTINGS_KEYS,
@@ -33,9 +32,8 @@ export const QuotesService = GObject.registerClass({
         this._session = null;
         this._failedProviders = new Set();
         this._tickers = loadTickerConfigs(this._settings);
-        this._displaySettings = loadDisplaySettings(this._settings);
         this._refreshIntervalSeconds = loadRefreshIntervalSeconds(this._settings);
-        this._entries = createLoadingEntries(this._tickers, this._displaySettings);
+        this._entries = createLoadingEntries(this._tickers);
         this._quoteStore = new QuoteStore();
         const liveProviderOptions = {
             uuid,
@@ -51,12 +49,7 @@ export const QuotesService = GObject.registerClass({
             onRefresh: forced => this._refreshQuotes(forced),
             onReconnectLiveProviders: () => this._liveProviders.forEach(provider => provider.reconnectNow()),
             onRebuildEntries: () => {
-                this._entries = buildEntries(
-                    this._tickers,
-                    this._quoteStore,
-                    this._displaySettings,
-                    this._entries
-                );
+                this._entries = buildEntries(this._tickers, this._quoteStore, this._entries);
                 this.emit('entries-changed');
                 this._scheduler.schedulePriceFlashReset(this._entries);
             },
@@ -117,7 +110,6 @@ export const QuotesService = GObject.registerClass({
         ));
     }
 
-    /* Settings changes update only the affected configuration and reuse current quote state. */
     _connectSettingsSignals() {
         this._settingsSignalIds = [
             this._settings.connect(`changed::${SETTINGS_KEYS.TICKERS_JSON}`, () => {
@@ -131,18 +123,7 @@ export const QuotesService = GObject.registerClass({
                 this._refreshIntervalSeconds = loadRefreshIntervalSeconds(this._settings);
                 this._scheduler.scheduleRefreshTimer(this._refreshIntervalSeconds);
             }),
-            this._settings.connect(`changed::${SETTINGS_KEYS.FORMAT_PRESET}`, () => this._handleDisplaySettingsChanged()),
-            this._settings.connect(`changed::${SETTINGS_KEYS.SHOW_PRICE}`, () => this._handleDisplaySettingsChanged()),
-            this._settings.connect(`changed::${SETTINGS_KEYS.SHOW_ARROW}`, () => this._handleDisplaySettingsChanged()),
-            this._settings.connect(`changed::${SETTINGS_KEYS.SHOW_PERCENT}`, () => this._handleDisplaySettingsChanged()),
-            this._settings.connect(`changed::${SETTINGS_KEYS.SEPARATOR_STYLE}`, () => this._handleDisplaySettingsChanged()),
-            this._settings.connect(`changed::${SETTINGS_KEYS.FONT_PRESET}`, () => this._handleDisplaySettingsChanged()),
         ];
-    }
-
-    _handleDisplaySettingsChanged() {
-        this._displaySettings = loadDisplaySettings(this._settings);
-        this._scheduler.requestEntriesUpdate(true);
     }
 
     /* Async provider results belong only to the session and ticker configuration that requested them. */

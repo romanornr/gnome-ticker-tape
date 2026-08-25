@@ -58,18 +58,14 @@ export class LiveWebsocketProvider {
 
     start(session) {
         this._session = session;
-        void this._connectIfNeeded();
     }
 
     stop() {
         this._session = null;
-        this._cancelPendingConnection();
-        this._tickers = [];
-        this._reconnectAttempt = 0;
-        this._transportFailureReported = false;
-        this._payloadFailureReported = false;
         this._reconnectTimeoutId = removeTimeout(this._reconnectTimeoutId);
+        this._cancelPendingConnection();
         this._disconnectWebsocket();
+        this._tickers = [];
     }
 
     updateSubscriptions(tickers) {
@@ -99,7 +95,7 @@ export class LiveWebsocketProvider {
         return isLiveCryptoTicker(ticker, this.id);
     }
 
-    /* REST fallback remains active until the provider acknowledges live traffic. */
+    /* REST fallback remains active until a valid live quote arrives for the symbol. */
     selectPollTickers(tickers) {
         return tickers.filter(ticker => !this._readySymbols.has(ticker.liveSymbol));
     }
@@ -153,22 +149,18 @@ export class LiveWebsocketProvider {
     _cancelPendingConnection() {
         const pendingConnection = this._pendingConnection;
         this._pendingConnection = null;
-        pendingConnection?.cancel();
+        if (pendingConnection)
+            pendingConnection.cancel();
     }
 
-    /* Socket callbacks capture their connection so delayed signals from an old transport cannot mutate new state. */
     _adoptWebsocket(websocket, liveSymbols) {
         this._websocket = websocket;
         this._websocketSignalIds = [
-            websocket.connect('message', (_connection, type, messageBytes) => {
-                if (this._websocket === websocket)
-                    this._handleSocketMessage(type, messageBytes);
-            }),
-            websocket.connect('error', (_connection, error) => {
-                if (this._websocket === websocket)
-                    this._recoverTransport({error, message: `${this._name} websocket error`});
-            }),
-            websocket.connect('closed', () => this._handleDisconnect(websocket)),
+            websocket.connect('message', (_connection, type, messageBytes) =>
+                this._handleSocketMessage(type, messageBytes)),
+            websocket.connect('error', (_connection, error) =>
+                this._recoverTransport({error, message: `${this._name} websocket error`})),
+            websocket.connect('closed', () => this._recoverTransport()),
         ];
 
         this._lastMessageUsec = GLib.get_monotonic_time();
@@ -176,7 +168,6 @@ export class LiveWebsocketProvider {
         this._startWatchdog();
     }
 
-    /* All socket cleanup funnels through one helper so stop(), reconnect, and resubscribe mirror each other. */
     _disconnectWebsocket() {
         this._watchdogTimeoutId = removeTimeout(this._watchdogTimeoutId);
 
@@ -193,13 +184,6 @@ export class LiveWebsocketProvider {
         closeWebsocket(websocket);
     }
 
-    _handleDisconnect(websocket = this._websocket) {
-        if (websocket && websocket !== this._websocket)
-            return;
-
-        this._recoverTransport();
-    }
-
     /*
      * Every transport failure invalidates pending work, drops subscription
      * ownership, marks cached quotes stale, and schedules at most one retry.
@@ -213,13 +197,9 @@ export class LiveWebsocketProvider {
 
         if (message)
             this._reportTransportFailure(error, message);
-        this._notifyStaleTickers();
+        if (this._tickers.length > 0)
+            this._onStale(this._tickers);
         this._scheduleReconnect();
-    }
-
-    _notifyStaleTickers(tickers = this._tickers) {
-        if (tickers.length > 0)
-            this._onStale(tickers);
     }
 
     _reportTransportFailure(error, message) {
@@ -233,9 +213,8 @@ export class LiveWebsocketProvider {
             log(`${this._uuid}: ${message}`);
     }
 
-    /* Persistent transports retry conservatively until live traffic proves recovery. */
     _scheduleReconnect() {
-        if (!this._session || this._reconnectTimeoutId !== 0 || this._getDesiredSymbols().length === 0)
+        if (this._reconnectTimeoutId !== 0)
             return;
 
         const index = Math.min(this._reconnectAttempt, LIVE_CRYPTO_RECONNECT_DELAYS_SECONDS.length - 1);
@@ -279,10 +258,8 @@ export class LiveWebsocketProvider {
         return (nowUsec - this._lastMessageUsec) / 1_000_000 >= LIVE_SILENCE_TIMEOUT_SECONDS;
     }
 
-    /* The base class handles decode and lifecycle actions; subclasses only decide what a payload means. */
     _handleSocketMessage(type, messageBytes) {
         this._lastMessageUsec = GLib.get_monotonic_time();
-        this._transportFailureReported = false;
 
         if (type !== Soup.WebsocketDataType.TEXT)
             return;
@@ -301,19 +278,20 @@ export class LiveWebsocketProvider {
         this._payloadFailureReported = false;
 
         const result = this._handlePayload(payload);
+        if (!result)
+            return;
 
-        if (result?.staleTickers?.length > 0) {
+        if (result.staleTickers?.length > 0) {
             result.staleTickers.forEach(ticker => this._readySymbols.delete(ticker.liveSymbol));
-            this._notifyStaleTickers(result.staleTickers);
+            this._onStale(result.staleTickers);
         }
 
-        if (result?.readySymbols?.length > 0) {
+        if (result.quotesBySymbol?.size > 0) {
             result.readySymbols.forEach(symbol => this._readySymbols.add(symbol));
             this._reconnectAttempt = 0;
-        }
-
-        if (result?.quotesBySymbol?.size > 0)
+            this._transportFailureReported = false;
             this._onQuotes(result.quotesBySymbol);
+        }
     }
 }
 

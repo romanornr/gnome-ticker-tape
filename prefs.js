@@ -4,14 +4,9 @@ import Gtk from 'gi://Gtk?version=4.0';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-import {
-    getAssetCategoryOptions,
-    getCryptoProviderOptions,
-    getTickerMarketSessionPolicy,
-} from './utils/asset-categories.js';
+import {getAssetCategoryOptions} from './utils/asset-categories.js';
 import {LEFT_PANEL_SIDE, RIGHT_PANEL_SIDE} from './utils/panel-sides.js';
 import {
-    getTickersForSide,
     loadDisplaySettings,
     loadRefreshIntervalSeconds,
     loadTickerConfigs,
@@ -19,33 +14,20 @@ import {
     saveTickerConfigs,
     SETTINGS_KEYS,
 } from './utils/settings.js';
-import {cloneTicker} from './utils/ticker-config.js';
 import {
     formatRefreshIntervalLabel,
     getFontPresetOptions,
-    getFormatPresetOptions,
     getRefreshIntervalOptions,
     getSeparatorOptions,
 } from './utils/display-settings.js';
 import {presentTickerDialog} from './utils/prefs/ticker-dialog-controller.js';
 
-/*
- * prefs.js owns the preferences window as a page-level composition layer.
- *
- * It is responsible for:
- * - building the top-level prefs groups and ticker rows
- * - wiring row actions to saved settings mutations
- * - delegating complex dialog behavior to the ticker dialog controller
- *
- * That separation keeps this file focused on page structure while the dialog
- * controller owns the denser search/validation/save state machine.
- */
+/* The preferences page owns saved-ticker actions and delegates catalog selection to its dialog. */
 class TickerPreferencesPage extends Adw.PreferencesPage {
     static {
         GObject.registerClass(this);
     }
 
-    /* The page constructor captures shared settings/window dependencies and builds the full prefs UI once. */
     constructor(settings, window) {
         super({title: 'Preferences', icon_name: 'view-list-symbolic'});
 
@@ -57,13 +39,11 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
         this._tickerRows = [];
         this._refreshOptions = getRefreshIntervalOptions();
         this._assetCategoryOptions = getAssetCategoryOptions();
-        this._cryptoProviderOptions = getCryptoProviderOptions();
 
         this._build();
         this._rebuildTickerRows();
     }
 
-    /* _build() assembles the static prefs groups and common controls before ticker rows are populated. */
     _build() {
         this._leftTickerGroup = new Adw.PreferencesGroup({title: 'Left Panel Tickers', description: 'Tickers configured to appear on the left side of the panel.'});
         this.add(this._leftTickerGroup);
@@ -94,13 +74,6 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
 
         const displaySettings = loadDisplaySettings(this._settings);
 
-        displayGroup.add(this._createComboRow({
-            title: 'Format preset',
-            options: getFormatPresetOptions(),
-            selectedValue: displaySettings.formatPreset,
-            onSelected: value => this._settings.set_string(SETTINGS_KEYS.FORMAT_PRESET, value),
-        }));
-
         displayGroup.add(this._createSwitchRow({
             title: 'Show price',
             key: SETTINGS_KEYS.SHOW_PRICE,
@@ -130,13 +103,12 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
         }));
     }
 
-    /* Saved ticker changes always rerender the visible row list through this one rebuild path. */
     _rebuildTickerRows() {
         this._clearTickerRows();
 
         const tickers = loadTickerConfigs(this._settings);
-        const leftTickers = getTickersForSide(tickers, LEFT_PANEL_SIDE);
-        const rightTickers = getTickersForSide(tickers, RIGHT_PANEL_SIDE);
+        const leftTickers = tickers.filter(ticker => ticker.panelSide === LEFT_PANEL_SIDE);
+        const rightTickers = tickers.filter(ticker => ticker.panelSide === RIGHT_PANEL_SIDE);
 
         this._addTickerRowsForSide({tickers, visibleTickers: leftTickers, group: this._leftTickerGroup, addSide: LEFT_PANEL_SIDE});
         this._addTickerRowsForSide({tickers, visibleTickers: rightTickers, group: this._rightTickerGroup, addSide: RIGHT_PANEL_SIDE});
@@ -149,10 +121,6 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
         this._addTickerRow(this._tickerActionsGroup, resetRow);
     }
 
-    /*
-     * Each side-specific row builder keeps ordering/edit/remove/add actions
-     * localized to the panel side currently being rendered.
-     */
     _addTickerRowsForSide({tickers, visibleTickers, group, addSide}) {
         visibleTickers.forEach((ticker, visibleIndex) => {
             const index = tickers.indexOf(ticker);
@@ -186,12 +154,7 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
                 presentTickerDialog({
                     window: this._window,
                     title: 'Edit ticker',
-                    initialTicker: cloneTicker(ticker),
-                    assetCategoryOptions: this._assetCategoryOptions,
-                    cryptoProviderOptions: this._cryptoProviderOptions,
-                    createComboRow: options => this._createComboRow(options),
-                    createTextButton: (label, onClicked) => this._createTextButton(label, onClicked),
-                    findOptionIndex: (options, value) => this._findOptionIndex(options, value),
+                    initialTicker: ticker,
                     onSave: updatedTicker => {
                         const nextTickers = [...tickers];
                         nextTickers[index] = updatedTicker;
@@ -225,13 +188,7 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
                             priceDecimals: 2,
                             panelSide: addSide,
                             assetCategory,
-                            marketSessionId: getTickerMarketSessionPolicy({assetCategory}).defaultMarketSessionId,
                         },
-                        assetCategoryOptions: this._assetCategoryOptions,
-                        cryptoProviderOptions: this._cryptoProviderOptions,
-                        createComboRow: options => this._createComboRow(options),
-                        createTextButton: (label, onClicked) => this._createTextButton(label, onClicked),
-                        findOptionIndex: (options, value) => this._findOptionIndex(options, value),
                         onSave: newTicker => {
                             saveTickerConfigs(this._settings, [...tickers, newTicker]);
                             this._rebuildTickerRows();
@@ -243,11 +200,10 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
         this._addTickerRow(group, addRow);
     }
 
-    /* Asset-category selection is a lightweight first step so the later ticker dialog opens in the right mode. */
     _presentAssetCategoryDialog({title, initialAssetCategory, onSelected}) {
         const dialog = new Adw.AlertDialog({
             heading: title,
-            body: 'Choose what kind of ticker you want to add so the right market session and suggestions are ready immediately.',
+            body: 'Choose what kind of ticker you want to add.',
         });
         dialog.add_response('cancel', 'Cancel');
         dialog.add_response('continue', 'Continue');
@@ -276,19 +232,16 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
         dialog.present(this._window);
     }
 
-    /* Row cleanup is centralized so every rebuild starts from a clean page state. */
     _clearTickerRows() {
         this._tickerRows.forEach(({group, row}) => group.remove(row));
         this._tickerRows = [];
     }
 
-    /* The page tracks dynamically-added rows so later rebuilds can remove them safely. */
     _addTickerRow(group, row) {
         group.add(row);
         this._tickerRows.push({group, row});
     }
 
-    /* Boolean settings rows are created here so the page reuses one binding convention. */
     _createSwitchRow({title, key}) {
         const row = new Adw.SwitchRow({title, active: this._settings.get_boolean(key)});
         row.connect('notify::active', widget => {
@@ -297,7 +250,6 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
         return row;
     }
 
-    /* Combo rows are reused across prefs and dialog helpers to keep option rendering behavior consistent. */
     _createComboRow({title, subtitle = '', options, selectedValue, onSelected = null}) {
         const stringList = Gtk.StringList.new(options.map(option => option.title));
         const row = new Adw.ComboRow({title, subtitle, model: stringList});
@@ -310,15 +262,9 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
         return row;
     }
 
-    /* Option lookup is factored out so controller code can reuse the same selection convention. */
-    _findOptionIndex(options, value) {
-        return Math.max(0, options.findIndex(option => option.value === value));
-    }
-
-    /* Icon buttons centralize the small row-action styling used by reorder controls. */
     _createIconButton(iconName, tooltipText, onClicked, disabled = false) {
         const button = new Gtk.Button({
-            icon_name: iconName,
+            child: new Gtk.Image({icon_name: iconName}),
             tooltip_text: tooltipText,
             sensitive: !disabled,
             valign: Gtk.Align.CENTER,
@@ -327,7 +273,6 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
         return button;
     }
 
-    /* Text buttons centralize the common action-button style used across prefs rows and dialogs. */
     _createTextButton(label, onClicked) {
         const button = new Gtk.Button({label, valign: Gtk.Align.CENTER});
         button.connect('clicked', onClicked);
@@ -336,7 +281,6 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
 }
 
 export default class TickerPriceExtensionPreferences extends ExtensionPreferences {
-    /* GNOME calls this once to let the extension populate the top-level preferences window. */
     fillPreferencesWindow(window) {
         window.set_default_size(760, 720);
         window.add(new TickerPreferencesPage(this.getSettings(), window));

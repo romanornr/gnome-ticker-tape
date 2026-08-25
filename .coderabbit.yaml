@@ -56,10 +56,9 @@ reviews:
       instructions: >-
         GJS/ESM targeting GNOME Shell 49-50, no build step and no runtime
         dependencies: flag any Node-only API, bundler assumption, or new
-        third-party import. Comments follow CODE_STYLE_GUIDE.md — file and
-        exported-symbol comments explain system role, boundaries, and
-        invariants; comments that restate syntax should be flagged as
-        noise.
+        third-party import. Comments follow CODE_STYLE_GUIDE.md: require them
+        only for non-obvious ownership, provider semantics, or lifecycle
+        invariants, and flag comments that restate names or syntax as noise.
 
     - path: "tests/**"
       instructions: >-

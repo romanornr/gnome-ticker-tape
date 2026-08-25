@@ -1,6 +1,5 @@
-import {ASSET_CATEGORIES, withDefaultMarketSession} from '../asset-categories.js';
+import {ASSET_CATEGORIES} from '../asset-categories.js';
 
-/* This file is the large curated U.S. equity suggestion source used by prefs search and default market metadata. */
 export const US_EQUITY_TICKERS = [
     {label: 'AAPL', keywords: ['apple']},
     {label: 'ABBV', keywords: ['abbvie']},
@@ -133,7 +132,7 @@ export const US_EQUITY_TICKERS = [
     {label: 'WMT', keywords: ['walmart']},
     {label: 'XOM', keywords: ['exxon', 'exxon mobil']},
     {label: 'ZTS', keywords: ['zoetis']},
-].map(entry => withDefaultMarketSession({
+].map(entry => ({
     assetCategory: ASSET_CATEGORIES.EQUITY,
     label: entry.label,
     symbol: entry.symbol ?? `${entry.label.toLowerCase()}.us`,

@@ -1,6 +1,5 @@
-import {ASSET_CATEGORIES, withDefaultMarketSession} from '../asset-categories.js';
+import {ASSET_CATEGORIES} from '../asset-categories.js';
 
-/* This file is the curated Japan equity suggestion source used by prefs search and Japan cash-session defaults. */
 export const JAPAN_EQUITY_TICKERS = [
     {label: '1301', keywords: ['kyokuyo']},
     {label: '1332', keywords: ['nissui']},
@@ -119,7 +118,7 @@ export const JAPAN_EQUITY_TICKERS = [
     {label: '6674', keywords: ['gs yuasa']},
     {label: '6701', keywords: ['nec']},
     {label: '6702', keywords: ['fujitsu']},
-].map(entry => withDefaultMarketSession({
+].map(entry => ({
     assetCategory: ASSET_CATEGORIES.EQUITY,
     label: entry.label,
     symbol: `${entry.label.toLowerCase()}.jp`,

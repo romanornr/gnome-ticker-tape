@@ -12,8 +12,8 @@ const ER_API_ENDPOINT = 'https://open.er-api.com/v6/latest/USD';
 export async function refresh(tickers, {session}) {
     const fxRequests = tickers
         .map(ticker => ({
-            storeKey: `${ticker?.symbol ?? ''}`.trim().toUpperCase(),
-            fxPair: parseFxPairSymbol(ticker?.symbol),
+            storeKey: ticker.symbol.toUpperCase(),
+            fxPair: parseFxPairSymbol(ticker.symbol),
         }))
         .filter(request => request.fxPair !== null);
 
@@ -28,15 +28,16 @@ export async function refresh(tickers, {session}) {
 }
 
 /* Rates arrive as units-per-USD, so any pair reduces to rates[quote] / rates[base]. */
-export function deriveFxQuotes(payload, fxRequests) {
+function deriveFxQuotes(payload, fxRequests) {
     const quotesBySymbol = new Map();
-    if (payload?.result !== 'success')
-        return quotesBySymbol;
+    if (payload?.result !== 'success' || !payload.rates ||
+        typeof payload.rates !== 'object' || Array.isArray(payload.rates))
+        throw new Error('Fallback FX provider returned an invalid rate table.');
 
-    const rates = payload.rates ?? {};
+    const rates = payload.rates;
     const quoteDate = normalizeUpdateTimestamp(payload.time_last_update_unix);
     if (quoteDate === '')
-        return quotesBySymbol;
+        throw new Error('Fallback FX provider returned an invalid update time.');
 
     fxRequests.forEach(({storeKey, fxPair}) => {
         const baseRate = rates[fxPair.baseCurrency];
@@ -54,8 +55,7 @@ export function deriveFxQuotes(payload, fxRequests) {
     return quotesBySymbol;
 }
 
-/* The table's unix timestamp becomes the YYYYMMDD quote date (UTC). */
-export function normalizeUpdateTimestamp(unixSeconds) {
+function normalizeUpdateTimestamp(unixSeconds) {
     if (!Number.isFinite(unixSeconds) || unixSeconds <= 0)
         return '';
 

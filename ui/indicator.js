@@ -6,30 +6,23 @@ import St from 'gi://St';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-import {DEFAULT_DISPLAY_SETTINGS, getFontPresetStyle} from '../utils/display-settings.js';
+import {
+    DEFAULT_DISPLAY_SETTINGS,
+    getFontPresetStyle,
+    getSeparatorText,
+} from '../utils/display-settings.js';
 import {getDensityFontScale, shouldFitFontPreset} from '../utils/display-density.js';
 
-/* Separators and stale fragments keep the Shell theme color but recede through one shared opacity. */
 const DIMMED_OPACITY = 166;
 
-/*
- * TickerIndicator is the last step of the pipeline: it turns prebuilt entry
- * models into actual GNOME Shell label actors.
- *
- * It deliberately expects already-formatted entries from the quote/entry-model
- * layers, so it stays dumb about markets, providers, and formatting rules.
- */
+/* Turns quote entry fragments and display settings into GNOME Shell actors. */
 export const TickerIndicator = GObject.registerClass(
 class TickerIndicator extends PanelMenu.Button {
-    /* The indicator initializes one reusable actor tree and one lightweight settings menu entry. */
     _init(openPreferences) {
         super._init(0.0, 'Ticker Indicator', false);
 
         this._openPreferences = openPreferences;
         this._content = new St.BoxLayout({y_align: Clutter.ActorAlign.CENTER});
-        this._contentScale = 1;
-        this._useFittedLabels = false;
-
         this.add_child(this._content);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -39,25 +32,22 @@ class TickerIndicator extends PanelMenu.Button {
         });
     }
 
-    /*
-     * setEntries() is the final projection from entry-model output into GNOME
-     * Shell actors. The indicator trusts upstream layers to have already
-     * decided formatting, visibility, and colors.
-     */
     setEntries(entries, displaySettings = DEFAULT_DISPLAY_SETTINGS) {
         this._content.destroy_all_children();
-        this._useFittedLabels = shouldFitFontPreset(displaySettings.fontPreset);
-        this._contentScale = Number.isFinite(displaySettings.fontScaleOverride)
+        const contentScale = Number.isFinite(displaySettings.fontScaleOverride)
             ? displaySettings.fontScaleOverride
-            : getDensityFontScale(entries, displaySettings.fontPreset);
-        this._applyContentScale();
+            : getDensityFontScale(entries, displaySettings);
+        this._content.style = contentScale < 1 ? `font-size: ${contentScale}em;` : '';
         const fontStyle = getFontPresetStyle(displaySettings.fontPreset);
-        const createLabel = this._useFittedLabels ? createFittedTickerLabel : createTickerLabel;
+        const createLabel = shouldFitFontPreset(displaySettings.fontPreset)
+            ? createFittedTickerLabel
+            : createTickerLabel;
+        const separator = getSeparatorText(displaySettings.separatorStyle);
 
-        entries.forEach(entry => {
-            if (entry.separatorBefore) {
+        entries.forEach((entry, index) => {
+            if (index > 0) {
                 this._content.add_child(createLabel({
-                    text: entry.separatorBefore,
+                    text: separator,
                     style: buildLabelStyle({fontStyle}),
                     opacity: DIMMED_OPACITY,
                 }));
@@ -68,7 +58,7 @@ class TickerIndicator extends PanelMenu.Button {
                 style: buildLabelStyle({weight: 500, fontStyle}),
             }));
 
-            if (entry.showPrice) {
+            if (displaySettings.showPrice) {
                 this._content.add_child(createLabel({
                     text: ` ${entry.priceText}`,
                     style: buildLabelStyle({
@@ -79,7 +69,7 @@ class TickerIndicator extends PanelMenu.Button {
                 }));
             }
 
-            if (entry.showArrow) {
+            if (displaySettings.showArrow && entry.arrow) {
                 this._content.add_child(createLabel({
                     text: ` ${entry.arrow}`,
                     style: buildLabelStyle({
@@ -92,7 +82,7 @@ class TickerIndicator extends PanelMenu.Button {
                 }));
             }
 
-            if (entry.showPercent) {
+            if (displaySettings.showPercent && entry.percentText) {
                 this._content.add_child(createLabel({
                     text: ` ${entry.percentText}`,
                     style: buildLabelStyle({
@@ -105,13 +95,8 @@ class TickerIndicator extends PanelMenu.Button {
             }
         });
     }
-
-    _applyContentScale() {
-        this._content.style = this._contentScale < 1 ? `font-size: ${this._contentScale}em;` : '';
-    }
 });
 
-/* Default fonts use GNOME Shell's normal label allocation behavior. */
 function createTickerLabel({text, style, opacity = 255}) {
     return new St.Label({
         opacity,
@@ -141,7 +126,6 @@ function createFittedTickerLabel({text, style, opacity = 255}) {
     return label;
 }
 
-/* Inline style construction keeps the panel fragment hierarchy consistent without adding stylesheet plumbing. */
 function buildLabelStyle({color = null, weight = null, fontSize = null, fontStyle = {}}) {
     const parts = [];
 

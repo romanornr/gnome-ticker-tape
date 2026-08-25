@@ -7,7 +7,6 @@ import {
 } from './cnbc-symbols.js';
 
 const CNBC_BATCH_SIZE = 30;
-/* CNBC rejects well-known tool user agents (curl, wget), so identify honestly as this extension. */
 const CNBC_USER_AGENT = 'ticker-tape-gnome-extension/1.0';
 const CNBC_QUOTE_ENDPOINT = 'https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol';
 const DXY_SAVED_SYMBOL = 'dx.f';
@@ -37,8 +36,7 @@ export async function refresh(tickers, {session}) {
     return assembleQuotes(plan, quotesByCnbcSymbol);
 }
 
-/* One batched URL serves runtime polling and verification; "=" and "|" must survive encoding for CNBC's grammar. */
-export function buildQuoteUrl(cnbcSymbols) {
+function buildQuoteUrl(cnbcSymbols) {
     const joinedSymbols = cnbcSymbols
         .map(cnbcSymbol => encodeURIComponent(cnbcSymbol).replace(/%3D/g, '='))
         .join('|');
@@ -52,8 +50,12 @@ export function buildQuoteUrl(cnbcSymbols) {
  * Unknown symbols come back as bare {code, symbol} stubs and are skipped here.
  */
 export function parseRestQuoteResponse(payload) {
+    const result = payload?.FormattedQuoteResult;
+    if (!result || typeof result !== 'object' || !Object.hasOwn(result, 'FormattedQuote'))
+        throw new Error('CNBC returned an invalid quote response.');
+
     const quotesByCnbcSymbol = new Map();
-    const entries = payload?.FormattedQuoteResult?.FormattedQuote;
+    const entries = result.FormattedQuote;
     const quoteList = Array.isArray(entries) ? entries : entries ? [entries] : [];
 
     quoteList.forEach(entry => {
@@ -61,7 +63,7 @@ export function parseRestQuoteResponse(payload) {
         const price = parseQuoteNumber(entry?.last);
         const quoteDate = normalizeQuoteDate(entry?.last_time);
 
-        if (cnbcSymbol === '' || !Number.isFinite(price) || quoteDate === '')
+        if (cnbcSymbol === '' || !Number.isFinite(price) || price <= 0 || quoteDate === '')
             return;
 
         /*
@@ -76,15 +78,14 @@ export function parseRestQuoteResponse(payload) {
         quotesByCnbcSymbol.set(cnbcSymbol, {
             price,
             quoteDate,
-            previousClose: Number.isFinite(previousClose) ? previousClose : null,
+            previousClose: Number.isFinite(previousClose) && previousClose > 0 ? previousClose : null,
         });
     });
 
     return quotesByCnbcSymbol;
 }
 
-/* CNBC prices carry thousands separators ("4,118.90"), so numeric parsing strips them first. */
-export function parseQuoteNumber(text) {
+function parseQuoteNumber(text) {
     const normalized = `${text ?? ''}`.replace(/,/g, '').trim();
     if (normalized === '')
         return null;
@@ -93,18 +94,16 @@ export function parseQuoteNumber(text) {
     return Number.isFinite(value) ? value : null;
 }
 
-/* CNBC last_time is either a bare date or a full ISO timestamp; both normalize into YYYYMMDD. */
-export function normalizeQuoteDate(dateText) {
+function normalizeQuoteDate(dateText) {
     const normalized = `${dateText ?? ''}`.slice(0, 10).replaceAll('-', '');
     return /^\d{8}$/.test(normalized) ? normalized : '';
 }
 
-/* DXY keeps its saved catalog symbol while provider routing recognizes it as a derived basket. */
-export function isDerivedDxySymbol(symbol) {
+function isDerivedDxySymbol(symbol) {
     return `${symbol ?? ''}`.trim().toLowerCase() === DXY_SAVED_SYMBOL;
 }
 
-/* An FX pair quote is the ratio of both legs' USD-per-unit rates, dated by the freshest leg. */
+/* An FX pair quote is dated by its oldest component so freshness is never overstated. */
 export function deriveFxQuote({baseCurrency, quoteCurrency}, quotesByCnbcSymbol) {
     const baseLeg = resolveFxLeg(baseCurrency, quotesByCnbcSymbol);
     const quoteLeg = resolveFxLeg(quoteCurrency, quotesByCnbcSymbol);
@@ -112,18 +111,20 @@ export function deriveFxQuote({baseCurrency, quoteCurrency}, quotesByCnbcSymbol)
         return null;
 
     const price = baseLeg.usdPerUnit / quoteLeg.usdPerUnit;
-    if (!Number.isFinite(price))
+    if (!Number.isFinite(price) || price <= 0)
         return null;
 
     const previousCloseRatio = baseLeg.previousUsdPerUnit !== null && quoteLeg.previousUsdPerUnit !== null
         ? baseLeg.previousUsdPerUnit / quoteLeg.previousUsdPerUnit
         : null;
     /* Validated like price, so a degenerate leg cannot leak a non-finite previous close downstream. */
-    const previousClose = Number.isFinite(previousCloseRatio) ? previousCloseRatio : null;
+    const previousClose = Number.isFinite(previousCloseRatio) && previousCloseRatio > 0
+        ? previousCloseRatio
+        : null;
     const quoteDate = [baseLeg.quoteDate, quoteLeg.quoteDate]
         .filter(date => date !== null)
         .sort()
-        .at(-1) ?? '';
+        .at(0) ?? '';
     if (quoteDate === '')
         return null;
 
@@ -134,18 +135,18 @@ export function deriveFxQuote({baseCurrency, quoteCurrency}, quotesByCnbcSymbol)
 export function deriveDxyQuote(quotesByCnbcSymbol) {
     const legs = DXY_FORMULA.legs.map(([symbol, exponent]) => [quotesByCnbcSymbol.get(symbol), exponent]);
     const deriveValue = field => {
-        if (legs.some(([quote]) => !Number.isFinite(quote?.[field])))
+        if (legs.some(([quote]) => !Number.isFinite(quote?.[field]) || quote[field] <= 0))
             return null;
 
         const value = legs.reduce(
             (result, [quote, exponent]) => result * Math.pow(quote[field], exponent), DXY_FORMULA.constant);
-        return Number.isFinite(value) ? value : null;
+        return Number.isFinite(value) && value > 0 ? value : null;
     };
     const price = deriveValue('price');
     if (price === null)
         return null;
 
-    const quoteDate = legs.map(([quote]) => quote.quoteDate).filter(Boolean).sort().at(-1) ?? '';
+    const quoteDate = legs.map(([quote]) => quote.quoteDate).filter(Boolean).sort().at(0) ?? '';
     if (quoteDate === '')
         return null;
 
@@ -172,7 +173,6 @@ function resolveFxLeg(currencyCode, quotesByCnbcSymbol) {
     };
 }
 
-/* Tickers split into direct symbols, FX pairs, and DXY; every derived spot leg joins the same batch. */
 function buildRequestPlan(tickers) {
     const directRequests = [];
     const fxRequests = [];
@@ -180,7 +180,7 @@ function buildRequestPlan(tickers) {
     const requestSymbols = new Set();
 
     tickers.forEach(ticker => {
-        const symbol = `${ticker?.symbol ?? ''}`.trim();
+        const symbol = ticker.symbol;
         const storeKey = symbol.toUpperCase();
         const fxPair = parseFxPairSymbol(symbol);
 
@@ -219,7 +219,7 @@ function assembleQuotes({directRequests, fxRequests, dxyRequests}, quotesByCnbcS
     directRequests.forEach(({storeKey, cnbcSymbol}) => {
         const quote = quotesByCnbcSymbol.get(cnbcSymbol);
         if (quote)
-            quotesBySymbol.set(storeKey, {...quote});
+            quotesBySymbol.set(storeKey, quote);
     });
 
     fxRequests.forEach(({storeKey, fxPair}) => {

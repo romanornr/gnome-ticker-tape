@@ -1,6 +1,5 @@
-import {ASSET_CATEGORIES, withDefaultMarketSession} from '../asset-categories.js';
+import {ASSET_CATEGORIES} from '../asset-categories.js';
 
-/* This file is the curated U.S. ETF suggestion source used by prefs search and U.S.-session defaults. */
 export const US_ETF_TICKERS = [
     {label: 'ACWI', keywords: ['acwi', 'etf']},
     {label: 'AGG', keywords: ['agg', 'etf']},
@@ -168,7 +167,7 @@ export const US_ETF_TICKERS = [
     {label: 'XLV', keywords: ['health care etf', 'healthcare']},
     {label: 'XLY', keywords: ['consumer discretionary etf', 'discretionary']},
     {label: 'XOP', keywords: ['oil gas explorers etf', 'exploration and production']},
-].map(entry => withDefaultMarketSession({
+].map(entry => ({
     assetCategory: ASSET_CATEGORIES.ETF,
     label: entry.label,
     symbol: `${entry.label.toLowerCase()}.us`,

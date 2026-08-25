@@ -1,6 +1,5 @@
-import {ASSET_CATEGORIES, withDefaultMarketSession} from '../asset-categories.js';
+import {ASSET_CATEGORIES} from '../asset-categories.js';
 
-/* Curated FX suggestions give prefs a searchable baseline for weekday currency markets derived from provider spot rates. */
 const FX_CURRENCY_DEFINITIONS = [
     {code: 'AUD', name: 'Australian dollar'},
     {code: 'BRL', name: 'Brazilian real'},
@@ -62,7 +61,7 @@ const FX_TICKER_DEFINITIONS = FX_CURRENCY_DEFINITIONS.flatMap(baseCurrency => FX
     }])
     .sort((left, right) => left.label.localeCompare(right.label));
 
-export const FX_TICKERS = FX_TICKER_DEFINITIONS.map(entry => withDefaultMarketSession({
+export const FX_TICKERS = FX_TICKER_DEFINITIONS.map(entry => ({
     assetCategory: ASSET_CATEGORIES.FX,
     label: entry.label,
     symbol: entry.symbol,

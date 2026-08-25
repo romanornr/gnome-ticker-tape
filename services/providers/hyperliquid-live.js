@@ -1,5 +1,10 @@
 import {CRYPTO_PROVIDERS} from '../../utils/asset-categories.js';
-import {hyperliquidAdapter} from '../../utils/crypto-providers/index.js';
+import {
+    fetchHyperliquidMarketSnapshots,
+    HYPERLIQUID_WEBSOCKET_URL,
+} from '../../utils/crypto-providers/hyperliquid/catalog.js';
+import {createHyperliquidQuote} from '../../utils/crypto-providers/hyperliquid/quotes.js';
+import {normalizeHyperliquidLiveSymbol} from '../../utils/crypto-providers/hyperliquid/symbols.js';
 import {LiveWebsocketProvider} from './live-websocket-provider.js';
 
 /*
@@ -11,21 +16,19 @@ export class HyperliquidProvider extends LiveWebsocketProvider {
             ...options,
             id: CRYPTO_PROVIDERS.HYPERLIQUID,
             name: 'Hyperliquid',
-            websocketUrl: hyperliquidAdapter.websocketUrl,
+            websocketUrl: HYPERLIQUID_WEBSOCKET_URL,
         });
     }
 
     async poll(tickers, {session}) {
         if (!session || tickers.length === 0) return new Map();
 
-        const snapshots = await hyperliquidAdapter.fetchMarketSnapshots(session);
-        const perpsBySymbol = new Map(snapshots.perps.map(entry => [entry.liveSymbol, entry]));
-        const spotsBySymbol = new Map(snapshots.spots.map(entry => [entry.liveSymbol, entry]));
+        const markets = await fetchHyperliquidMarketSnapshots(session);
+        const marketsBySymbol = new Map(markets.map(entry => [entry.liveSymbol, entry]));
         const quotesBySymbol = new Map();
 
         tickers.forEach(ticker => {
-            const entries = ticker.liveSymbol.includes('/') ? spotsBySymbol : perpsBySymbol;
-            const quote = hyperliquidAdapter.createQuote(entries.get(ticker.liveSymbol));
+            const quote = createHyperliquidQuote(marketsBySymbol.get(ticker.liveSymbol));
             if (quote) quotesBySymbol.set(ticker.symbol.toUpperCase(), quote);
         });
 
@@ -40,22 +43,13 @@ export class HyperliquidProvider extends LiveWebsocketProvider {
     }
 
     _handlePayload(payload) {
-        if (
-            payload?.channel === 'subscriptionResponse' &&
-            payload?.data?.method === 'subscribe' &&
-            payload?.data?.subscription?.type === 'activeAssetCtx'
-        ) {
-            const liveSymbol = hyperliquidAdapter.normalizeLiveSymbol(payload.data.subscription.coin);
-            return this._getSymbolToTickerSymbolMap().has(liveSymbol) ? {readySymbols: [liveSymbol]} : null;
-        }
-
         if (payload?.channel !== 'activeAssetCtx' || !payload?.data?.coin || !payload?.data?.ctx) return null;
 
-        const liveSymbol = hyperliquidAdapter.normalizeLiveSymbol(payload.data.coin);
+        const liveSymbol = normalizeHyperliquidLiveSymbol(payload.data.coin);
         const tickerSymbol = this._getSymbolToTickerSymbolMap().get(liveSymbol);
         if (!tickerSymbol) return null;
 
-        const quote = hyperliquidAdapter.createQuote({liveSymbol, ctx: payload.data.ctx});
+        const quote = createHyperliquidQuote({ctx: payload.data.ctx});
 
         if (!quote) return null;
 

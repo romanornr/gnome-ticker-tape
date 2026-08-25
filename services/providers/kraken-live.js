@@ -1,5 +1,9 @@
 import {CRYPTO_PROVIDERS} from '../../utils/asset-categories.js';
-import {krakenAdapter} from '../../utils/crypto-providers/index.js';
+import {KRAKEN_WEBSOCKET_URL} from '../../utils/crypto-providers/kraken/catalog.js';
+import {
+    createKrakenQuote,
+    fetchKrakenTickerQuotes,
+} from '../../utils/crypto-providers/kraken/quotes.js';
 import {LiveWebsocketProvider} from './live-websocket-provider.js';
 
 /*
@@ -12,35 +16,16 @@ export class KrakenProvider extends LiveWebsocketProvider {
             ...options,
             id: CRYPTO_PROVIDERS.KRAKEN,
             name: 'Kraken',
-            websocketUrl: krakenAdapter.websocketUrl,
+            websocketUrl: KRAKEN_WEBSOCKET_URL,
         });
-        this._reportedRejectedSymbols = new Set();
-    }
-
-    stop() {
-        this._reportedRejectedSymbols.clear();
-        super.stop();
-    }
-
-    /* Rejection warnings follow active subscriptions, so removed pairs cannot leave diagnostic state behind. */
-    updateSubscriptions(tickers) {
-        const previousSignature = [...this._getDesiredSymbols()].sort().join('|');
-        super.updateSubscriptions(tickers);
-
-        const desiredSymbols = new Set(this._getDesiredSymbols());
-        [...this._reportedRejectedSymbols]
-            .filter(symbol => symbol !== '*' && !desiredSymbols.has(symbol))
-            .forEach(symbol => this._reportedRejectedSymbols.delete(symbol));
-
-        if ([...desiredSymbols].sort().join('|') !== previousSignature)
-            this._reportedRejectedSymbols.delete('*');
+        this._rejectionReported = false;
     }
 
     /* Kraken's REST endpoint accepts the same live symbols used by its websocket. */
     async poll(tickers, {session}) {
         if (!session || tickers.length === 0) return new Map();
 
-        const quotesByPair = await krakenAdapter.fetchTickerQuotes(
+        const quotesByPair = await fetchKrakenTickerQuotes(
             session, [...new Set(tickers.map(ticker => ticker.liveSymbol))]);
         const quotesBySymbol = new Map();
 
@@ -72,23 +57,10 @@ export class KrakenProvider extends LiveWebsocketProvider {
             const staleTickers = rejectedSymbol === ''
                 ? this._tickers
                 : this._tickers.filter(ticker => ticker.liveSymbol === rejectedSymbol);
-            const warningKey = rejectedSymbol === '' ? '*' : rejectedSymbol;
-            this._reportRejectedSubscription(warningKey, rejectedSymbol, payload.error);
+            this._reportRejectedSubscription(rejectedSymbol, payload.error);
 
             /* Kraken acknowledges each pair independently, so valid subscriptions keep their live transport. */
             return {staleTickers};
-        }
-
-        if (
-            payload?.method === 'subscribe' &&
-            payload?.success === true &&
-            payload?.result?.channel === 'ticker'
-        ) {
-            this._clearAcknowledgedRejections(payload.result.symbol);
-            const readySymbols = Array.isArray(payload.result.symbol)
-                ? payload.result.symbol
-                : [payload.result.symbol];
-            return {readySymbols};
         }
 
         if (payload?.channel !== 'ticker' || !Array.isArray(payload.data)) return null;
@@ -99,32 +71,29 @@ export class KrakenProvider extends LiveWebsocketProvider {
 
         payload.data.forEach(entry => {
             const tickerSymbol = liveSymbolMap.get(entry?.symbol ?? '');
-            const quote = krakenAdapter.createQuote(entry);
+            const quote = createKrakenQuote(entry);
 
             if (!tickerSymbol || !quote)
                 return;
 
-            this._clearAcknowledgedRejections(entry.symbol);
             readySymbols.push(entry.symbol);
             updatedQuotes.set(tickerSymbol, quote);
         });
 
+        if (updatedQuotes.size > 0)
+            this._rejectionReported = false;
+
         return {readySymbols, quotesBySymbol: updatedQuotes};
     }
 
-    /* One bad pair produces one actionable warning until that pair later acknowledges or returns data. */
-    _reportRejectedSubscription(warningKey, rejectedSymbol, errorMessage) {
-        if (this._reportedRejectedSymbols.has(warningKey))
+    /* One warning covers a rejection streak until valid quote traffic proves recovery. */
+    _reportRejectedSubscription(rejectedSymbol, errorMessage) {
+        if (this._rejectionReported)
             return;
 
-        this._reportedRejectedSymbols.add(warningKey);
+        this._rejectionReported = true;
         const symbolMessage = rejectedSymbol === '' ? 'one or more symbols' : rejectedSymbol;
         const reason = `${errorMessage ?? 'subscription rejected'}`.trim();
         log(`${this._uuid}: Kraken rejected ${symbolMessage}: ${reason}`);
-    }
-
-    _clearAcknowledgedRejections(symbols) {
-        const acknowledgedSymbols = Array.isArray(symbols) ? ['*', ...symbols] : ['*', symbols];
-        acknowledgedSymbols.filter(Boolean).forEach(symbol => this._reportedRejectedSymbols.delete(symbol));
     }
 }

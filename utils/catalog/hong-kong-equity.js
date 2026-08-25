@@ -1,6 +1,5 @@
-import {ASSET_CATEGORIES, withDefaultMarketSession} from '../asset-categories.js';
+import {ASSET_CATEGORIES} from '../asset-categories.js';
 
-/* This file is the curated Hong Kong equity suggestion source used by prefs search and Hong Kong cash-session defaults. */
 export const HONG_KONG_EQUITY_TICKERS = [
     {label: '1', keywords: ['ckh holdings']},
     {label: '2', keywords: ['clp holdings']},
@@ -199,7 +198,7 @@ export const HONG_KONG_EQUITY_TICKERS = [
     {label: '9988', keywords: ['baba w']},
     {label: '9992', keywords: ['pop mart']},
     {label: '9999', keywords: ['ntes s']},
-].map(entry => withDefaultMarketSession({
+].map(entry => ({
     assetCategory: ASSET_CATEGORIES.EQUITY,
     label: entry.label,
     symbol: `${entry.label.toLowerCase()}.hk`,

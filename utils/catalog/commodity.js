@@ -1,6 +1,5 @@
-import {ASSET_CATEGORIES, withDefaultMarketSession} from '../asset-categories.js';
+import {ASSET_CATEGORIES} from '../asset-categories.js';
 
-/* Curated commodity suggestions feed prefs while shared policy separates listed funds from global markets. */
 export const COMMODITY_TICKERS = [
     {label: 'BAR', symbol: 'bar.us', keywords: ['gold bullion', 'physical gold']},
     {label: 'BCI', symbol: 'bci.us', keywords: ['broad commodities', 'commodity index']},
@@ -92,7 +91,7 @@ export const COMMODITY_TICKERS = [
     {label: 'XME', symbol: 'xme.us', keywords: ['metals mining', 'miners etf']},
     {label: 'XOP', symbol: 'xop.us', keywords: ['oil gas explorers', 'energy exploration']},
     {label: 'Zinc', symbol: 'zn.f', keywords: ['zinc futures']},
-].map(entry => withDefaultMarketSession({
+].map(entry => ({
     assetCategory: ASSET_CATEGORIES.COMMODITY,
     label: entry.label,
     symbol: entry.symbol,

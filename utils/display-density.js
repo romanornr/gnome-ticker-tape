@@ -1,16 +1,14 @@
-import {FONT_PRESETS} from './display-settings.js';
+import {
+    DEFAULT_DISPLAY_SETTINGS,
+    FONT_PRESETS,
+    getSeparatorText,
+} from './display-settings.js';
 
 const DENSITY_SCALE_START = 90;
 const DENSITY_SCALE_END = 150;
 const MIN_DENSITY_FONT_SCALE = 0.88;
 
-/*
- * Display density estimates how much text one panel-side indicator is about to
- * render, then maps crowded mono-font content to a smaller inherited font size.
- *
- * It is kept separate from ui/indicator.js so the policy can be tested outside
- * the GNOME Shell process.
- */
+/* Crowded mono-font indicators scale down together so both panel sides match. */
 export function shouldFitFontPreset(fontPreset) {
     switch (fontPreset) {
     case FONT_PRESETS.MONOSPACE:
@@ -22,11 +20,11 @@ export function shouldFitFontPreset(fontPreset) {
     }
 }
 
-export function getDensityFontScale(entries, fontPreset = FONT_PRESETS.SYSTEM) {
-    if (!shouldFitFontPreset(fontPreset))
+export function getDensityFontScale(entries, displaySettings = DEFAULT_DISPLAY_SETTINGS) {
+    if (!shouldFitFontPreset(displaySettings.fontPreset))
         return 1;
 
-    const density = estimateEntriesDensity(entries);
+    const density = estimateEntriesDensity(entries, displaySettings);
     if (density <= DENSITY_SCALE_START)
         return 1;
 
@@ -35,23 +33,24 @@ export function getDensityFontScale(entries, fontPreset = FONT_PRESETS.SYSTEM) {
     return Math.round(scale * 100) / 100;
 }
 
-export function getSharedDensityFontScale(entryGroups, fontPreset = FONT_PRESETS.SYSTEM) {
+export function getSharedDensityFontScale(entryGroups, displaySettings = DEFAULT_DISPLAY_SETTINGS) {
     return entryGroups.reduce((sharedScale, entries) => {
-        return Math.min(sharedScale, getDensityFontScale(entries, fontPreset));
+        return Math.min(sharedScale, getDensityFontScale(entries, displaySettings));
     }, 1);
 }
 
-function estimateEntriesDensity(entries) {
-    return entries.reduce((total, entry) => {
-        let entryDensity = textDensity(entry.separatorBefore) + textDensity(entry.label);
+function estimateEntriesDensity(entries, displaySettings) {
+    const separator = getSeparatorText(displaySettings.separatorStyle);
+    return entries.reduce((total, entry, index) => {
+        let entryDensity = textDensity(index > 0 ? separator : '') + textDensity(entry.label);
 
-        if (entry.showPrice)
+        if (displaySettings.showPrice)
             entryDensity += textDensity(` ${entry.priceText}`);
 
-        if (entry.showArrow)
+        if (displaySettings.showArrow && entry.arrow)
             entryDensity += textDensity(` ${entry.arrow}`);
 
-        if (entry.showPercent)
+        if (displaySettings.showPercent && entry.percentText)
             entryDensity += textDensity(` ${entry.percentText}`);
 
         return total + entryDensity;

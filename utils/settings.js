@@ -1,18 +1,15 @@
 import {
     ASSET_CATEGORIES,
     CRYPTO_PROVIDERS,
-    withDefaultMarketSession,
 } from './asset-categories.js';
 import {
     DEFAULT_DISPLAY_SETTINGS,
     DEFAULT_REFRESH_INTERVAL_SECONDS,
     FONT_PRESETS,
-    FORMAT_PRESETS,
     SEPARATOR_STYLES,
 } from './display-settings.js';
 import {LEFT_PANEL_SIDE, RIGHT_PANEL_SIDE} from './panel-sides.js';
 import {
-    cloneTicker,
     normalizeTickerConfig,
     serializeTickerConfig,
 } from './ticker-config.js';
@@ -20,7 +17,6 @@ import {
 export const SETTINGS_KEYS = {
     TICKERS_JSON: 'tickers-json',
     REFRESH_INTERVAL_SECONDS: 'refresh-interval-seconds',
-    FORMAT_PRESET: 'format-preset',
     SHOW_PRICE: 'show-price',
     SHOW_ARROW: 'show-arrow',
     SHOW_PERCENT: 'show-percent',
@@ -28,7 +24,7 @@ export const SETTINGS_KEYS = {
     FONT_PRESET: 'font-preset',
 };
 
-export const DEFAULT_TICKERS = [
+const DEFAULT_TICKERS = [
     {
         label: 'SPX',
         symbol: '^spx',
@@ -89,20 +85,18 @@ export const DEFAULT_TICKERS = [
         panelSide: RIGHT_PANEL_SIDE,
         liveSymbol: 'BTC/USD',
     },
-].map(withDefaultMarketSession);
+];
 
 export function loadTickerConfigs(settings) {
     const serialized = settings.get_string(SETTINGS_KEYS.TICKERS_JSON);
     if (serialized.trim() === '')
-        return cloneTickers(DEFAULT_TICKERS);
+        return loadDefaultTickers();
 
     try {
         const parsed = JSON.parse(serialized);
         if (!Array.isArray(parsed))
-            return cloneTickers(DEFAULT_TICKERS);
+            return loadDefaultTickers();
 
-        /* Deleting the last ticker in prefs saves [], and the panel must then show nothing. */
-        /* Defaults are only for a first run or a setting we cannot read, not for a list the user emptied. */
         if (parsed.length === 0)
             return [];
 
@@ -110,10 +104,10 @@ export function loadTickerConfigs(settings) {
             .map(normalizeTickerConfig)
             .filter(ticker => ticker !== null);
 
-        return tickers.length > 0 ? tickers : cloneTickers(DEFAULT_TICKERS);
+        return tickers.length > 0 ? tickers : loadDefaultTickers();
     } catch (error) {
         logError(error, 'ticker-tape: invalid ticker settings, using defaults');
-        return cloneTickers(DEFAULT_TICKERS);
+        return loadDefaultTickers();
     }
 }
 
@@ -126,11 +120,6 @@ export function resetTickerConfigs(settings) {
 }
 
 export function loadDisplaySettings(settings) {
-    const formatPreset = normalizeEnum(
-        settings.get_string(SETTINGS_KEYS.FORMAT_PRESET),
-        FORMAT_PRESETS,
-        DEFAULT_DISPLAY_SETTINGS.formatPreset
-    );
     const separatorStyle = normalizeEnum(
         settings.get_string(SETTINGS_KEYS.SEPARATOR_STYLE),
         SEPARATOR_STYLES,
@@ -143,7 +132,6 @@ export function loadDisplaySettings(settings) {
     );
 
     return {
-        formatPreset,
         showPrice: settings.get_boolean(SETTINGS_KEYS.SHOW_PRICE),
         showArrow: settings.get_boolean(SETTINGS_KEYS.SHOW_ARROW),
         showPercent: settings.get_boolean(SETTINGS_KEYS.SHOW_PERCENT),
@@ -157,12 +145,8 @@ export function loadRefreshIntervalSeconds(settings) {
     return Number.isInteger(interval) && interval > 0 ? interval : DEFAULT_REFRESH_INTERVAL_SECONDS;
 }
 
-export function getTickersForSide(tickers, side) {
-    return tickers.filter(ticker => (ticker.panelSide ?? RIGHT_PANEL_SIDE) === side);
-}
-
-function cloneTickers(tickers) {
-    return tickers.map(cloneTicker);
+function loadDefaultTickers() {
+    return DEFAULT_TICKERS.map(normalizeTickerConfig);
 }
 
 function normalizeEnum(value, enumValues, fallback) {
