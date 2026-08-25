@@ -6,23 +6,19 @@ import {
     POSITIVE_COLOR,
 } from '../utils/format.js';
 
-/*
- * This module translates QuoteStore state into loading, error, and display entries.
- * It decorates price changes; staleness is whatever the store recorded, so market
- * hours are never consulted here.
- */
+/* QuoteStore state becomes loading, error, and display entries; market policy stays upstream. */
 export function buildEntries(tickers, quoteStore, displaySettings, previousEntries = []) {
     const baseEntries = tickers.map((ticker, index) => {
-        const quote = quoteStore.getQuote(ticker.symbol);
+        const {quote, stale} = quoteStore.getState(ticker.symbol);
 
-        if (!quote && !quoteStore.isStale(ticker.symbol))
+        if (!quote && !stale)
             return createLoadingEntry(ticker, index, displaySettings);
 
         if (!quote)
             return createErrorEntry(ticker, index, displaySettings);
 
         return createDisplayEntry(ticker, quote, quote.previousClose, index, displaySettings, {
-            isStale: quoteStore.isStale(ticker.symbol),
+            isStale: stale,
         });
     });
 

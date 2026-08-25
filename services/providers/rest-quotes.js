@@ -36,10 +36,10 @@ export async function refresh(tickers, context) {
     return quotesBySymbol;
 }
 
-/* QuotesService composes this flat capability directly while live crypto remains owned by its socket provider. */
 export const restProvider = {
     id: 'rest',
     ownsTicker: ticker => !isLiveCryptoTicker(ticker),
+    selectPollTickers: tickers => tickers,
     poll: refresh,
 };
 
@@ -65,7 +65,6 @@ export async function verifySymbol(session, symbol, assetCategory = null) {
     };
 }
 
-/* Both providers receive every miss and enforce their own ownership without duplicating eligibility policy here. */
 async function runFallbacks(missingTickers, context, quotesBySymbol) {
     /* The two fallbacks hit unrelated hosts, so a slow one must not delay the other. */
     await Promise.all([

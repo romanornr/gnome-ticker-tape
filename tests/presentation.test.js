@@ -28,20 +28,19 @@ export function runTests() {
         changeColor: null, isStale: true, priceFlash: false,
     }], 'A completed miss should move the same entry to its error state');
 
-    store.setQuote(TICKER.symbol, {price: 5100, quoteDate: '20260323', previousClose: 5000});
-    store.markRefreshed([TICKER]);
+    store.recordPoll([TICKER], quoteMap(5100, '20260323', 5000));
     entries = buildEntries([TICKER], store, DEFAULT_DISPLAY_SETTINGS, entries);
     assertDeepEqual(view(entries), [{
         priceText: '5,100', percentText: '2.0%', arrow: '▲', priceColor: null,
         changeColor: POSITIVE_COLOR, isStale: false, priceFlash: false,
     }], 'A fresh quote should produce the complete formatted entry');
 
-    store.setQuote(TICKER.symbol, {price: 5200, quoteDate: '20260323', previousClose: 5000});
+    store.mergeQuotes(quoteMap(5200, '20260323', null));
     const flashed = buildEntries([TICKER], store, DEFAULT_DISPLAY_SETTINGS, entries);
     assertDeepEqual(view(flashed), [{
         priceText: '5,200', percentText: '4.0%', arrow: '▲', priceColor: POSITIVE_COLOR,
         changeColor: POSITIVE_COLOR, isStale: false, priceFlash: true,
-    }], 'A visible price increase should decorate the composed entry once');
+    }], 'A same-date missing close should preserve the baseline and decorate the price increase');
 
     entries = clearPriceFlash(flashed);
     assertDeepEqual(view(entries), [{
@@ -49,13 +48,13 @@ export function runTests() {
         changeColor: POSITIVE_COLOR, isStale: false, priceFlash: false,
     }], 'Clearing a flash should restore inherited neutral price text');
 
-    store.setQuote(TICKER.symbol, {price: 5100, quoteDate: '20260323', previousClose: 5200});
+    store.mergeQuotes(quoteMap(5100, '20260324', null));
     store.markStale([TICKER]);
     entries = buildEntries([TICKER], store, DEFAULT_DISPLAY_SETTINGS, entries);
     assertDeepEqual(view(entries), [{
-        priceText: '5,100', percentText: '1.9%', arrow: '▼', priceColor: null,
+        priceText: '5,100', percentText: '', arrow: '', priceColor: null,
         changeColor: null, isStale: true, priceFlash: false,
-    }], 'Stale values should stay neutral and never start a price flash');
+    }], 'A new provider date should clear a missing close while stale values stay neutral');
 
     const shortEntries = [panelEntry('DXY', '98.21'), panelEntry('EUR/USD', '1.0912')];
     const crowdedEntries = [
@@ -71,16 +70,12 @@ export function runTests() {
     'Density policy should remain full-size when short and bounded when crowded');
 }
 
+const quoteMap = (price, quoteDate, previousClose) =>
+    new Map([[TICKER.symbol.toUpperCase(), {price, quoteDate, previousClose}]]);
+
 function view(entries) {
-    return entries.map(entry => ({
-        priceText: entry.priceText,
-        percentText: entry.percentText,
-        arrow: entry.arrow,
-        priceColor: entry.priceColor,
-        changeColor: entry.changeColor,
-        isStale: entry.isStale,
-        priceFlash: entry.priceFlash,
-    }));
+    return entries.map(({priceText, percentText, arrow, priceColor, changeColor, isStale, priceFlash}) =>
+        ({priceText, percentText, arrow, priceColor, changeColor, isStale, priceFlash}));
 }
 
 function panelEntry(label, priceText) {

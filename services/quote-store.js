@@ -1,101 +1,69 @@
 import GLib from 'gi://GLib';
 
-/*
- * QuoteStore is the normalized in-memory boundary shared by providers and entries.
- * It owns quote merging, refresh timestamps, and stale flags.
- */
+/* QuoteStore keeps each symbol's quote, refresh cadence, and stale state together. */
 export class QuoteStore {
-    /* The store keeps both quote values and refresh timestamps because scheduling depends on both. */
     constructor() {
-        this._quotesBySymbol = new Map();
-        this._lastRefreshTimeBySymbol = new Map();
-        this._staleSymbols = new Set();
+        this._stateBySymbol = new Map();
     }
 
-    /* Providers write normalized quotes here so later layers read one stable shape. */
-    setQuote(symbol, quote) {
-        const normalizedSymbol = normalizeSymbol(symbol);
-        if (normalizedSymbol === '' || !quote)
-            return;
-
-        const cachedPreviousClose = this._quotesBySymbol.get(normalizedSymbol)?.previousClose ?? null;
-        this._quotesBySymbol.set(normalizedSymbol, {
-            ...quote,
-            previousClose: quote.previousClose === null ? cachedPreviousClose : quote.previousClose,
-        });
-        this._staleSymbols.delete(normalizedSymbol);
+    getState(symbol) {
+        return this._stateBySymbol.get(normalizeSymbol(symbol)) ?? {
+            quote: null,
+            lastRefreshUsec: 0,
+            stale: false,
+        };
     }
 
-    /* Entry-building and provider fallback logic read from the same cache through this lookup. */
-    getQuote(symbol) {
-        const normalizedSymbol = normalizeSymbol(symbol);
-        return normalizedSymbol === '' ? null : this._quotesBySymbol.get(normalizedSymbol) ?? null;
+    /* Live updates replace quote data without changing the REST polling cadence. */
+    mergeQuotes(quotesBySymbol) {
+        quotesBySymbol.forEach((quote, symbol) => this._setQuote(normalizeSymbol(symbol), quote));
     }
 
-    /* When saved tickers change, stale symbols are removed here so old quotes cannot leak back into the panel. */
-    prune(activeSymbols) {
-        const activeSymbolSet = new Set(
-            [...activeSymbols].map(symbol => normalizeSymbol(symbol)).filter(symbol => symbol !== '')
-        );
-
-        [...this._quotesBySymbol.keys()].forEach(symbol => {
-            if (!activeSymbolSet.has(symbol))
-                this._quotesBySymbol.delete(symbol);
-        });
-
-        [...this._lastRefreshTimeBySymbol.keys()].forEach(symbol => {
-            if (!activeSymbolSet.has(symbol))
-                this._lastRefreshTimeBySymbol.delete(symbol);
-        });
-
-        [...this._staleSymbols].forEach(symbol => {
-            if (!activeSymbolSet.has(symbol))
-                this._staleSymbols.delete(symbol);
-        });
-    }
-
-    /* After a refresh succeeds, scheduling records the new monotonic refresh timestamp here. */
-    markRefreshed(symbols) {
+    /* A completed poll records quote hits and misses as one state transition. */
+    recordPoll(tickers, quotesBySymbol) {
         const refreshedAtUsec = GLib.get_monotonic_time();
-        [...symbols].forEach(symbol => {
-            const normalizedSymbol = normalizeSymbol(symbol?.symbol ?? symbol);
-            if (normalizedSymbol !== '') {
-                this._lastRefreshTimeBySymbol.set(normalizedSymbol, refreshedAtUsec);
-                this._staleSymbols.delete(normalizedSymbol);
-            }
+        const normalizedQuotes = new Map();
+        quotesBySymbol.forEach((quote, symbol) => normalizedQuotes.set(normalizeSymbol(symbol), quote));
+
+        tickers.forEach(ticker => {
+            const symbol = normalizeSymbol(ticker.symbol);
+            const quote = normalizedQuotes.get(symbol);
+            if (quote)
+                this._setQuote(symbol, quote, refreshedAtUsec);
+            else
+                this._stateBySymbol.set(symbol, {...this.getState(symbol), stale: true});
         });
     }
 
-    /* Failed or incomplete attempts mark symbols stale, including cold-cache misses. */
-    markStale(symbols) {
-        [...symbols].forEach(symbol => {
-            const normalizedSymbol = normalizeSymbol(symbol?.symbol ?? symbol);
-            if (normalizedSymbol !== '')
-                this._staleSymbols.add(normalizedSymbol);
+    markStale(tickers) {
+        tickers.forEach(ticker => {
+            const symbol = normalizeSymbol(ticker.symbol);
+            this._stateBySymbol.set(symbol, {...this.getState(symbol), stale: true});
         });
     }
 
-    /* Entry-building asks this to decide whether a cached quote should render as stale. */
-    isStale(symbol) {
-        const normalizedSymbol = normalizeSymbol(symbol);
-        return normalizedSymbol !== '' && this._staleSymbols.has(normalizedSymbol);
+    prune(tickers) {
+        const activeSymbols = new Set(tickers.map(ticker => normalizeSymbol(ticker.symbol)));
+        for (const symbol of this._stateBySymbol.keys()) {
+            if (!activeSymbols.has(symbol))
+                this._stateBySymbol.delete(symbol);
+        }
     }
 
-    /* QuotesService asks for the last refresh timestamp when delegating schedule-policy decisions. */
-    getLastRefreshUsec(symbol) {
-        const normalizedSymbol = normalizeSymbol(symbol);
-        return normalizedSymbol === '' ? 0 : this._lastRefreshTimeBySymbol.get(normalizedSymbol) ?? 0;
-    }
-
-    /* Full shutdown clears both quote values and cadence history so restart begins cleanly. */
-    clear() {
-        this._quotesBySymbol.clear();
-        this._lastRefreshTimeBySymbol.clear();
-        this._staleSymbols.clear();
+    /* A missing previous close carries forward only within the same provider date. */
+    _setQuote(symbol, quote, refreshedAtUsec = null) {
+        const state = this.getState(symbol);
+        const previousClose = quote.previousClose === null && state.quote?.quoteDate === quote.quoteDate
+            ? state.quote.previousClose ?? null
+            : quote.previousClose;
+        this._stateBySymbol.set(symbol, {
+            quote: {...quote, previousClose},
+            lastRefreshUsec: refreshedAtUsec ?? state.lastRefreshUsec,
+            stale: false,
+        });
     }
 }
 
-/* Symbol normalization keeps provider outputs and saved tickers keyed consistently across the system. */
 function normalizeSymbol(symbol) {
-    return `${symbol ?? ''}`.trim().toUpperCase();
+    return symbol.trim().toUpperCase();
 }

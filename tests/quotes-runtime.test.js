@@ -1,5 +1,6 @@
 import GLib from 'gi://GLib';
 
+import {buildEntries} from '../services/entry-model.js';
 import {QuoteUpdateScheduler} from '../services/quote-update-scheduler.js';
 import {QuotesService} from '../services/quotes.js';
 import {ASSET_CATEGORIES} from '../utils/asset-categories.js';
@@ -9,133 +10,139 @@ import {assertDeepEqual, assertEqual} from './support/assert.js';
 
 export async function runTests() {
     await testServicePipeline();
-    await testProviderHealthEpoch();
-    testSettingsReconfigurePipeline();
+    await testProviderFailureDeduplication();
+    await testSettingsReconfigurePipeline();
     await testStopRejectsLatePollCompletion();
     await testSchedulerSingleFlightAndStop();
 }
 
 async function testServicePipeline() {
-    const service = new QuotesService('test-uuid', createSettings([ticker('AAPL', 'aapl.us')]));
-    const snapshots = [];
-    const {promise: finalSnapshot, resolve: resolveFinalSnapshot} = Promise.withResolvers();
-    service._providers = [{
-        id: 'fixture',
-        ownsTicker: () => true,
-        poll: async () => new Map([['AAPL.US', {
-            price: 210,
-            quoteDate: '20260825',
-            previousClose: 205,
-        }]]),
-    }];
+    const tickers = [ticker('AAPL', 'aapl.us'), ticker('MSFT', 'msft.us')];
+    const service = new QuotesService('test-uuid', createSettings(tickers));
+    const firstProviderRendered = Promise.withResolvers();
+    const allProvidersRendered = Promise.withResolvers();
+    const secondPoll = Promise.withResolvers();
+    service._liveProviders = [];
+    service._pollProviders = [
+        createPollProvider('first', 'aapl.us', async () => new Map([['AAPL.US', quote(210)]])),
+        createPollProvider('second', 'msft.us', () => secondPoll.promise),
+    ];
     service.connect('entries-changed', () => {
         const snapshot = service.getEntries().map(entry => entry.priceText);
-        snapshots.push(snapshot);
-        if (snapshot[0] === '210.00')
-            resolveFinalSnapshot();
+        if (`${snapshot}` === '210.00,...')
+            firstProviderRendered.resolve();
+        if (`${snapshot}` === '210.00,410.00')
+            allProvidersRendered.resolve();
     });
 
     service.start();
-    await withTimeout(finalSnapshot, 'Timed out waiting for the provider-backed entry snapshot');
-
-    assertDeepEqual(snapshots[0], ['...'],
+    assertDeepEqual(service.getEntries().map(entry => entry.priceText), ['...', '...'],
         'Service startup should publish loading entries before provider work finishes');
-    assertEqual(service.getEntries()[0].priceText, '210.00',
-        'A provider result should flow through the store into the rendered entry snapshot');
+    await withTimeout(firstProviderRendered.promise, 'Fast provider result waited for the slow provider');
+    assertDeepEqual(service.getEntries().map(entry => entry.priceText), ['210.00', '...'],
+        'A completed provider should render while another provider is still pending');
+
+    service._scheduler._lastEntriesUpdateUsec = 0;
+    secondPoll.resolve(new Map([['MSFT.US', quote(410)]]));
+    await withTimeout(allProvidersRendered.promise, 'Timed out waiting for the final provider snapshot');
     service.stop();
 }
 
-async function testProviderHealthEpoch() {
-    const service = new QuotesService('test-uuid', createSettings());
-    const tickers = [ticker('AAPL', 'aapl.us'), ticker('MSFT', 'msft.us')];
+async function testProviderFailureDeduplication() {
+    const tickers = [ticker('AAPL', 'aapl.us')];
+    const service = new QuotesService('test-uuid', createSettings(tickers));
     const outcomes = [
+        new Error('first failure'),
+        new Error('repeated failure'),
         new Map([['AAPL.US', quote(210)]]),
-        new Map([['AAPL.US', quote(211)]]),
-        new Error('provider unavailable'),
-        new Error('provider still unavailable'),
-        new Map([['AAPL.US', quote(212)], ['MSFT.US', quote(410)]]),
+        new Error('failure after recovery'),
     ];
-    const provider = {
-        id: 'fixture',
-        async poll() {
-            const outcome = outcomes.shift();
-            if (outcome instanceof Error)
-                throw outcome;
-            return outcome;
-        },
-    };
-    const warnings = [];
+    const provider = createPollProvider('fixture', 'aapl.us', async () => {
+        const outcome = outcomes.shift();
+        if (outcome instanceof Error) throw outcome;
+        return outcome;
+    });
     const errors = [];
-    const originalLog = globalThis.log;
     const originalLogError = globalThis.logError;
-    globalThis.log = message => warnings.push(message);
     globalThis.logError = (error, message) => errors.push(`${message}: ${error.message}`);
     service._session = {};
+    service._scheduler = {requestEntriesUpdate() {}};
+    const configuration = service._tickers;
 
     try {
-        for (let index = 0; index < 5; index += 1)
-            await service._pollProvider(provider, tickers);
+        for (let index = 0; index < 4; index += 1)
+            await service._pollProvider(provider, tickers, service._session, configuration);
     } finally {
-        globalThis.log = originalLog;
         globalThis.logError = originalLogError;
     }
 
-    assertDeepEqual(warnings, [
-        'test-uuid: fixture quote provider returned 1 of 2 requested quote(s).',
-        'test-uuid: fixture quote provider recovered.',
-    ], 'Repeated partial polls should warn once per health epoch and once on recovery');
-    assertDeepEqual(errors, ['test-uuid: failed to poll fixture quotes: provider unavailable'],
-        'Repeated failures should log one error per health epoch');
+    assertDeepEqual(errors, [
+        'test-uuid: failed to poll fixture quotes: first failure',
+        'test-uuid: failed to poll fixture quotes: failure after recovery',
+    ], 'A provider should log once per rejected-poll streak');
 }
 
-function testSettingsReconfigurePipeline() {
-    const settings = createSettings([ticker('AAPL', 'aapl.us')]);
+async function testSettingsReconfigurePipeline() {
+    const initialTickers = [ticker('AAPL', 'aapl.us'), ticker('MSFT', 'msft.us')];
+    const nextTickers = [ticker('AAPL', 'aapl.us'), ticker('NVDA', 'nvda.us')];
+    const settings = createSettings(initialTickers);
     const service = new QuotesService('test-uuid', settings);
     const callbacks = [];
+    const oldPoll = Promise.withResolvers();
     service._session = {abort() {}};
-    service._providers = [{
-        updateSubscriptions(tickers) {
-            callbacks.push(['subscriptions', tickers.map(item => item.symbol)]);
-        },
+    service._quoteStore.recordPoll(initialTickers, new Map([
+        ['AAPL.US', quote(210)],
+        ['MSFT.US', quote(410)],
+    ]));
+    service._entries = buildEntries(initialTickers, service._quoteStore, service._displaySettings);
+    service._pollProviders = [createPollProvider('fixture', null, () => oldPoll.promise)];
+    service._liveProviders = [{
+        updateSubscriptions: tickers => callbacks.push(['subscriptions', tickers.map(item => item.symbol)]),
+        stop() {},
     }];
     service._scheduler = {
-        scheduleRefreshTimer(interval) {
-            callbacks.push(['schedule', interval]);
+        requestEntriesUpdate(immediate) {
+            callbacks.push(['rebuild', immediate]);
+            service._entries = buildEntries(
+                service._tickers, service._quoteStore, service._displaySettings, service._entries);
         },
-        requestRefresh(forced) {
-            callbacks.push(['refresh', forced]);
-        },
+        requestRefresh: forced => callbacks.push(['refresh', forced]),
         stop() {},
     };
     service._connectSettingsSignals();
 
-    settings.values[SETTINGS_KEYS.TICKERS_JSON] = JSON.stringify([ticker('MSFT', 'msft.us')]);
+    const staleRefresh = service._refreshQuotes(true);
+    settings.values[SETTINGS_KEYS.TICKERS_JSON] = JSON.stringify(nextTickers);
     settings.trigger(`changed::${SETTINGS_KEYS.TICKERS_JSON}`);
+    oldPoll.resolve(new Map([['AAPL.US', quote(999)], ['MSFT.US', quote(999)]]));
+    await staleRefresh;
 
     assertDeepEqual(service.getEntries().map(entry => [entry.symbol, entry.priceText]), [
-        ['msft.us', '...'],
-    ], 'A ticker-setting change should replace the public snapshot with the new loading entry');
+        ['aapl.us', '210.00'],
+        ['nvda.us', '...'],
+    ], 'Reconfiguration should retain cached prices and load only new tickers');
+    assertDeepEqual([
+        service._quoteStore.getState('aapl.us').quote.price,
+        service._quoteStore.getState('msft.us'),
+    ], [210, {quote: null, lastRefreshUsec: 0, stale: false}],
+    'A stale configuration result must not restore removed or overwrite retained state');
     assertDeepEqual(callbacks, [
-        ['schedule', 300],
-        ['subscriptions', ['msft.us']],
+        ['rebuild', true],
+        ['subscriptions', ['aapl.us', 'nvda.us']],
         ['refresh', true],
-    ], 'A ticker-setting change should reschedule, resubscribe, and force one refresh');
+    ], 'A ticker-setting change should rebuild, resubscribe, and refresh without rescheduling');
     service.stop();
 }
 
 async function testStopRejectsLatePollCompletion() {
     const service = new QuotesService('test-uuid', createSettings([ticker('AAPL', 'aapl.us')]));
     const {promise: pollCompletion, resolve: finishPoll} = Promise.withResolvers();
-    let entryUpdateRequests = 0;
+    const entryUpdateRequests = [];
     service._session = {abort() {}};
-    service._providers = [{
-        ownsTicker: () => true,
-        poll: () => pollCompletion,
-    }];
+    service._liveProviders = [];
+    service._pollProviders = [createPollProvider('fixture', null, () => pollCompletion)];
     service._scheduler = {
-        requestEntriesUpdate() {
-            entryUpdateRequests += 1;
-        },
+        requestEntriesUpdate: () => entryUpdateRequests.push(true),
         stop() {},
     };
 
@@ -144,17 +151,17 @@ async function testStopRejectsLatePollCompletion() {
     finishPoll(new Map([['AAPL.US', quote(999)]]));
 
     await refresh;
-    assertEqual(entryUpdateRequests, 0,
+    assertEqual(entryUpdateRequests.length, 0,
         'A late provider completion should not schedule a UI rebuild');
-    assertEqual(service.getEntries()[0].priceText, '...',
-        'Stopping should leave a clean loading snapshot rather than expose late data');
+    assertEqual(service._quoteStore.getState('aapl.us').quote, null,
+        'A late provider completion should not mutate quote state');
 }
 
 async function testSchedulerSingleFlightAndStop() {
     const firstPass = Promise.withResolvers();
     const scopes = [];
-    let rebuilds = 0;
-    let reconnects = 0;
+    const rebuilds = [];
+    const reconnects = [];
     const networkMonitor = new FakeNetworkMonitor();
     const scheduler = new QuoteUpdateScheduler({
         onRefresh(forced) {
@@ -162,12 +169,8 @@ async function testSchedulerSingleFlightAndStop() {
             if (scopes.length === 1)
                 return firstPass.promise;
         },
-        onReconnectLiveProviders() {
-            reconnects += 1;
-        },
-        onRebuildEntries() {
-            rebuilds += 1;
-        },
+        onReconnectLiveProviders: () => reconnects.push(true),
+        onRebuildEntries: () => rebuilds.push(true),
         networkMonitor,
     });
     scheduler.scheduleRefreshTimer(3600);
@@ -180,7 +183,7 @@ async function testSchedulerSingleFlightAndStop() {
     networkMonitor.emit(true);
     networkMonitor.emit(false);
     networkMonitor.emit(true);
-    assertDeepEqual([reconnects, scopes], [1, [false, true]],
+    assertDeepEqual([reconnects.length, scopes], [1, [false, true]],
         'Only restored network availability should reconnect providers and force a refresh');
 
     scheduler.requestEntriesUpdate(true);
@@ -191,7 +194,7 @@ async function testSchedulerSingleFlightAndStop() {
     assertDeepEqual([
         scheduler._entriesUpdateTimeoutId,
         GLib.MainContext.default().find_source_by_id(pendingUpdateId),
-        rebuilds,
+        rebuilds.length,
     ], [0, null, 2],
     'A due rebuild should replace an older throttled source instead of running twice');
     scheduler.stop();
@@ -232,12 +235,9 @@ async function testSchedulerSingleFlightAndStop() {
 
 function ticker(label = 'AAPL', symbol = 'aapl.us') {
     return {
-        label,
-        symbol,
-        priceDecimals: 2,
+        label, symbol, priceDecimals: 2,
         marketSessionId: MARKET_SESSION_IDS.US_EQUITY_EXTENDED,
-        assetCategory: ASSET_CATEGORIES.EQUITY,
-        panelSide: 'right',
+        assetCategory: ASSET_CATEGORIES.EQUITY, panelSide: 'right',
     };
 }
 
@@ -245,32 +245,31 @@ function quote(price) {
     return {price, quoteDate: '20260825', previousClose: price - 1};
 }
 
-function createSettings(tickers = []) {
+function createPollProvider(id, symbol, poll) {
     return {
-        values: {
-            [SETTINGS_KEYS.TICKERS_JSON]: JSON.stringify(tickers),
-            [SETTINGS_KEYS.REFRESH_INTERVAL_SECONDS]: 300,
-        },
-        handlers: new Map(),
-        get_string(key) {
-            return this.values[key] ?? '';
-        },
-        get_boolean(key) {
-            return this.values[key] ?? false;
-        },
-        get_uint(key) {
-            return this.values[key] ?? 300;
-        },
+        id, poll,
+        ownsTicker: item => symbol === null || item.symbol === symbol,
+        selectPollTickers: tickers => tickers,
+    };
+}
+
+function createSettings(tickers = []) {
+    const values = {
+        [SETTINGS_KEYS.TICKERS_JSON]: JSON.stringify(tickers),
+        [SETTINGS_KEYS.REFRESH_INTERVAL_SECONDS]: 300,
+    };
+    const handlers = new Map();
+    return {
+        values,
+        get_string: key => values[key] ?? '',
+        get_boolean: key => values[key] ?? false,
+        get_uint: key => values[key] ?? 300,
         connect(signal, handler) {
-            this.handlers.set(signal, handler);
+            handlers.set(signal, handler);
             return signal;
         },
-        disconnect(signal) {
-            this.handlers.delete(signal);
-        },
-        trigger(signal) {
-            this.handlers.get(signal)();
-        },
+        disconnect: signal => handlers.delete(signal),
+        trigger: signal => handlers.get(signal)(),
     };
 }
 

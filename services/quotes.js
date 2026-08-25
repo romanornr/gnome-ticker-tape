@@ -25,29 +25,32 @@ export const QuotesService = GObject.registerClass({
         'entries-changed': {},
     },
 }, class QuotesService extends GObject.Object {
-    /*
-     * Construction wires provider and timer events into the entry pipeline.
-     * The flat provider list below is the single runtime composition point.
-     */
     _init(uuid, settings) {
         super._init();
         this._uuid = uuid;
         this._settings = settings;
         this._settingsSignalIds = [];
         this._session = null;
-        this._providerHealthStates = new Map();
+        this._failedProviders = new Set();
         this._tickers = loadTickerConfigs(this._settings);
         this._displaySettings = loadDisplaySettings(this._settings);
         this._refreshIntervalSeconds = loadRefreshIntervalSeconds(this._settings);
         this._entries = createLoadingEntries(this._tickers, this._displaySettings);
         this._quoteStore = new QuoteStore();
+        const liveProviderOptions = {
+            uuid,
+            onQuotes: quotesBySymbol => this._handleLiveQuotes(quotesBySymbol),
+            onStale: tickers => this._handleStaleTickers(tickers),
+        };
+        this._liveProviders = [
+            new KrakenProvider(liveProviderOptions),
+            new HyperliquidProvider(liveProviderOptions),
+        ];
+        this._pollProviders = [restProvider, ...this._liveProviders];
         this._scheduler = new QuoteUpdateScheduler({
             onRefresh: forced => this._refreshQuotes(forced),
-            onReconnectLiveProviders: () => this._providers.forEach(provider => provider.reconnectNow?.()),
+            onReconnectLiveProviders: () => this._liveProviders.forEach(provider => provider.reconnectNow()),
             onRebuildEntries: () => {
-                if (!this._session)
-                    return;
-
                 this._entries = buildEntries(
                     this._tickers,
                     this._quoteStore,
@@ -58,118 +61,70 @@ export const QuotesService = GObject.registerClass({
                 this._scheduler.schedulePriceFlashReset(this._entries);
             },
             onResetPriceFlash: nextEntries => {
-                if (!this._session)
-                    return;
-
                 this._entries = nextEntries;
                 this.emit('entries-changed');
             },
         });
-        const liveProviderOptions = {
-            uuid,
-            onQuotes: quotesBySymbol => this._handleLiveQuotes(quotesBySymbol),
-            onStale: tickers => this._handleStaleTickers(tickers),
-        };
-        this._providers = [
-            restProvider,
-            new KrakenProvider(liveProviderOptions),
-            new HyperliquidProvider(liveProviderOptions),
-        ];
     }
 
-    /* start() boots the full quote pipeline: settings, providers, initial loading state, and timers. */
     start() {
-        if (this._session)
-            return;
-
-        this._providerHealthStates.clear();
         this._session = new Soup.Session();
-        this._loadConfiguration();
         this._connectSettingsSignals();
-        this._entries = createLoadingEntries(this._tickers, this._displaySettings);
         this.emit('entries-changed');
 
-        this._providers.forEach(provider => provider.start?.(this._session));
-        this._updateProviderSubscriptions();
+        this._liveProviders.forEach(provider => provider.start(this._session));
+        this._liveProviders.forEach(provider => provider.updateSubscriptions(this._tickers));
 
         this._scheduler.scheduleRefreshTimer(this._refreshIntervalSeconds);
         this._scheduler.requestRefresh(true);
     }
 
-    /* stop() shuts down the quote pipeline in reverse order so sockets, timers, and cache state cannot leak. */
     stop() {
-        if (!this._session)
-            return;
-
         const session = this._session;
         this._session = null;
 
-        this._disconnectSettingsSignals();
+        this._settingsSignalIds.forEach(signalId => this._settings.disconnect(signalId));
         this._scheduler.stop();
-
-        this._providers.forEach(provider => provider.stop?.());
+        this._liveProviders.forEach(provider => provider.stop());
         session.abort();
-        this._providerHealthStates.clear();
-
-        this._quoteStore.clear();
-        this._entries = createLoadingEntries(this._tickers, this._displaySettings);
     }
 
-    /* The extension reads the current entry snapshot through this accessor when indicators need to redraw. */
     getEntries() {
         return this._entries;
     }
 
     /*
      * A refresh pass first decides what needs data right now, then delegates to
-     * the provider that owns each ticker. Live providers participate in normal
-     * polling while disconnected, or for subscriptions the provider rejected.
+     * the provider that owns each ticker. Live symbols remain in normal-cadence
+     * REST fallback until their websocket subscription becomes ready.
      */
     async _refreshQuotes(forceRefreshAll = false) {
         const session = this._session;
-        if (!session)
-            return;
-
+        const configuration = this._tickers;
         const now = createMarketScheduleNow();
         const tickersToRefresh = forceRefreshAll
-            ? this._tickers
-            : this._tickers.filter(ticker => this._shouldRefreshTicker(ticker, now));
-        const providerRefreshPlan = this._providers
+            ? configuration
+            : configuration.filter(ticker => this._shouldRefreshTicker(ticker, now));
+        const providerRefreshPlan = this._pollProviders
             .map(provider => {
                 const ownedTickers = tickersToRefresh.filter(ticker => provider.ownsTicker(ticker));
-                return {
-                    provider,
-                    tickers: provider.selectPollTickers?.(ownedTickers) ?? ownedTickers,
-                };
+                return {provider, tickers: provider.selectPollTickers(ownedTickers)};
             })
             .filter(({tickers}) => tickers.length > 0);
 
         await Promise.all(providerRefreshPlan.map(
-            ({provider, tickers}) => this._pollProvider(provider, tickers, session)
+            ({provider, tickers}) => this._pollProvider(provider, tickers, session, configuration)
         ));
-        if (this._session !== session)
-            return;
-
-        if (providerRefreshPlan.length > 0)
-            this._scheduler.requestEntriesUpdate(true);
     }
 
-    /*
-     * Settings changes feed back into the runtime here. Some changes trigger a
-     * full configuration reload, while display-only changes rebuild entries
-     * without touching network state.
-     */
+    /* Settings changes update only the affected configuration and reuse current quote state. */
     _connectSettingsSignals() {
-        this._disconnectSettingsSignals();
-
         this._settingsSignalIds = [
             this._settings.connect(`changed::${SETTINGS_KEYS.TICKERS_JSON}`, () => {
-                this._loadConfiguration();
-                this._quoteStore.prune(this._tickers.map(ticker => ticker.symbol));
-                this._entries = createLoadingEntries(this._tickers, this._displaySettings);
-                this.emit('entries-changed');
-                this._scheduler.scheduleRefreshTimer(this._refreshIntervalSeconds);
-                this._updateProviderSubscriptions();
+                this._tickers = loadTickerConfigs(this._settings);
+                this._quoteStore.prune(this._tickers);
+                this._scheduler.requestEntriesUpdate(true);
+                this._liveProviders.forEach(provider => provider.updateSubscriptions(this._tickers));
                 this._scheduler.requestRefresh(true);
             }),
             this._settings.connect(`changed::${SETTINGS_KEYS.REFRESH_INTERVAL_SECONDS}`, () => {
@@ -185,135 +140,53 @@ export const QuotesService = GObject.registerClass({
         ];
     }
 
-    /* Signal teardown is centralized so startup/shutdown and hot reconfiguration use the same cleanup path. */
-    _disconnectSettingsSignals() {
-        this._settingsSignalIds.forEach(signalId => this._settings.disconnect(signalId));
-        this._settingsSignalIds = [];
-    }
-
-    /* Display-only settings do not require refetching quotes, only rebuilding the current entry models. */
     _handleDisplaySettingsChanged() {
         this._displaySettings = loadDisplaySettings(this._settings);
         this._scheduler.requestEntriesUpdate(true);
     }
 
-    /* Configuration is always reloaded from settings before major orchestration steps. */
-    _loadConfiguration() {
-        this._tickers = loadTickerConfigs(this._settings);
-        this._displaySettings = loadDisplaySettings(this._settings);
-        this._refreshIntervalSeconds = loadRefreshIntervalSeconds(this._settings);
-    }
-
-    /* Provider polls are isolated and merge into the same normalized QuoteStore boundary. */
-    async _pollProvider(provider, tickers, session = this._session) {
-        if (!session || this._session !== session)
-            return;
-
+    /* Async provider results belong only to the session and ticker configuration that requested them. */
+    async _pollProvider(provider, tickers, session, configuration) {
         try {
-            const quotesBySymbol = await provider.poll(tickers, {
-                session,
-            });
-            if (this._session !== session)
+            const quotesBySymbol = await provider.poll(tickers, {session});
+            if (this._session !== session || this._tickers !== configuration)
                 return;
 
-            quotesBySymbol.forEach((quote, symbol) => this._quoteStore.setQuote(symbol, quote));
-            const refreshedTickers = tickers.filter(ticker => quotesBySymbol.has(ticker.symbol.toUpperCase()));
-            const staleTickers = tickers.filter(ticker => !quotesBySymbol.has(ticker.symbol.toUpperCase()));
-            this._quoteStore.markRefreshed(refreshedTickers);
-            this._quoteStore.markStale(staleTickers);
-            this._recordProviderHealth(provider, staleTickers.length === 0 ? 'complete' : 'partial', {
-                receivedCount: refreshedTickers.length,
-                requestedCount: tickers.length,
-            });
+            this._failedProviders.delete(provider);
+            this._quoteStore.recordPoll(tickers, quotesBySymbol);
         } catch (error) {
-            if (this._session !== session)
+            if (this._session !== session || this._tickers !== configuration)
                 return;
 
             this._quoteStore.markStale(tickers);
-            this._recordProviderHealth(provider, 'failed', {error});
-        }
-    }
-
-    /*
-     * Provider diagnostics describe health transitions rather than individual
-     * requests. A degraded epoch can emit one aggregate warning and, if it
-     * worsens, one stack trace; only a complete pass starts a fresh epoch.
-     */
-    _recordProviderHealth(provider, outcome, details = {}) {
-        const providerId = provider.id ?? 'unknown';
-        const unhealthyState = this._providerHealthStates.get(providerId);
-
-        if (outcome === 'complete') {
-            if (unhealthyState) {
-                this._logProviderWarning(`${providerId} quote provider recovered.`);
-                this._providerHealthStates.delete(providerId);
+            if (!this._failedProviders.has(provider)) {
+                this._failedProviders.add(provider);
+                logError(error, `${this._uuid}: failed to poll ${provider.id} quotes`);
             }
-            return;
         }
 
-        if (outcome === 'partial') {
-            if (!unhealthyState) {
-                this._logProviderWarning(
-                    `${providerId} quote provider returned ${details.receivedCount ?? 0} of ` +
-                    `${details.requestedCount ?? 0} requested quote(s).`
-                );
-                this._providerHealthStates.set(providerId, {failureReported: false});
-            }
-            return;
-        }
-
-        if (outcome !== 'failed' || unhealthyState?.failureReported)
-            return;
-
-        const error = details.error ?? new Error(`${providerId} quote provider failed`);
-        this._logProviderError(error, `failed to poll ${providerId} quotes`);
-        this._providerHealthStates.set(providerId, {failureReported: true});
-    }
-
-    _logProviderWarning(message) {
-        log(`${this._uuid}: ${message}`);
-    }
-
-    _logProviderError(error, message) {
-        logError(error, `${this._uuid}: ${message}`);
-    }
-
-    /* Live providers push quote bursts through this path so the scheduler can throttle UI churn. */
-    _handleLiveQuotes(quotesBySymbol) {
-        if (!this._session || !quotesBySymbol || quotesBySymbol.size === 0)
-            return;
-
-        quotesBySymbol.forEach((quote, symbol) => this._quoteStore.setQuote(symbol, quote));
         this._scheduler.requestEntriesUpdate(false);
     }
 
-    /* Live transport failures preserve cached quotes but mark them stale until fresh provider data arrives. */
-    _handleStaleTickers(tickers) {
-        if (!this._session || !tickers || tickers.length === 0)
-            return;
+    _handleLiveQuotes(quotesBySymbol) {
+        this._quoteStore.mergeQuotes(quotesBySymbol);
+        this._scheduler.requestEntriesUpdate(false);
+    }
 
+    _handleStaleTickers(tickers) {
         this._quoteStore.markStale(tickers);
         this._scheduler.requestEntriesUpdate(true);
     }
 
-    /* Saved ticker changes are reconciled into both live providers through this shared handoff. */
-    _updateProviderSubscriptions() {
-        this._providers.forEach(provider => provider.updateSubscriptions?.(this._tickers));
-    }
-
-    /*
-     * Schedule decisions are delegated so this service only asks "should this
-     * symbol refresh now?" rather than embedding time-zone and market-session
-     * rules directly in the orchestration flow.
-     */
     _shouldRefreshTicker(ticker, now) {
-        if (this._quoteStore.isStale(ticker.symbol))
+        const state = this._quoteStore.getState(ticker.symbol);
+        if (state.stale)
             return true;
 
         return shouldRefreshTicker(
             ticker,
             now,
-            this._quoteStore.getLastRefreshUsec(ticker.symbol),
+            state.lastRefreshUsec,
             this._refreshIntervalSeconds
         );
     }
