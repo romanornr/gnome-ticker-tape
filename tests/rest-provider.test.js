@@ -87,14 +87,9 @@ async function testPartialFailurePolicy() {
     assertEqual(partialSession.requestedUrls.filter(url => url.includes('quote.cnbc.com')).length, 2,
         'More than 30 provider symbols should be split into batches');
 
-    let message = '';
-    try {
-        await refreshRestQuotes([ticker('asml.nl', ASSET_CATEGORIES.EQUITY)], {
-            session: new RoutingFakeSession([['quote.cnbc.com', new Error('CNBC unavailable')]]),
-        });
-    } catch (error) {
-        message = error.message;
-    }
+    const message = await refreshRestQuotes([ticker('asml.nl', ASSET_CATEGORIES.EQUITY)], {
+        session: new RoutingFakeSession([['quote.cnbc.com', new Error('CNBC unavailable')]]),
+    }).then(() => '', error => error.message);
     assertEqual(message, 'CNBC unavailable',
         'An unrecoverable primary failure should reach the service health boundary');
 }
@@ -140,20 +135,14 @@ async function testVerificationContract() {
     ];
 
     for (const testCase of cases) {
-        let result = null;
-        let errorMessage = '';
-        try {
-            result = await verifySymbol(
-                new RoutingFakeSession(testCase.routes),
-                testCase.symbol,
-                testCase.category
-            );
-        } catch (error) {
-            errorMessage = error.message;
-        }
+        const result = await verifySymbol(
+            new RoutingFakeSession(testCase.routes),
+            testCase.symbol,
+            testCase.category
+        ).catch(error => error.message);
 
         if (testCase.error) {
-            assertEqual(errorMessage, testCase.error,
+            assertEqual(result, testCase.error,
                 `Verification should preserve the user-facing error for ${testCase.symbol}`);
         } else {
             assertDeepEqual(result, testCase.expected,

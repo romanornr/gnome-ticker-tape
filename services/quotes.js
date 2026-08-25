@@ -9,7 +9,6 @@ import {KrakenProvider} from './providers/kraken-live.js';
 import {restProvider} from './providers/rest-quotes.js';
 import {createLoadingEntries} from '../utils/format.js';
 import {
-    hasSettingsKey,
     loadDisplaySettings,
     loadRefreshIntervalSeconds,
     loadTickerConfigs,
@@ -187,18 +186,13 @@ export const QuotesService = GObject.registerClass({
             this._settings.connect(`changed::${SETTINGS_KEYS.SHOW_ARROW}`, () => this._handleDisplaySettingsChanged()),
             this._settings.connect(`changed::${SETTINGS_KEYS.SHOW_PERCENT}`, () => this._handleDisplaySettingsChanged()),
             this._settings.connect(`changed::${SETTINGS_KEYS.SEPARATOR_STYLE}`, () => this._handleDisplaySettingsChanged()),
+            this._settings.connect(`changed::${SETTINGS_KEYS.FONT_PRESET}`, () => this._handleDisplaySettingsChanged()),
         ];
-
-        if (hasSettingsKey(this._settings, SETTINGS_KEYS.FONT_PRESET)) {
-            this._settingsSignalIds.push(
-                this._settings.connect(`changed::${SETTINGS_KEYS.FONT_PRESET}`, () => this._handleDisplaySettingsChanged())
-            );
-        }
     }
 
     /* Signal teardown is centralized so startup/shutdown and hot reconfiguration use the same cleanup path. */
     _disconnectSettingsSignals() {
-        this._settingsSignalIds.forEach(signalId => this._settings?.disconnect(signalId));
+        this._settingsSignalIds.forEach(signalId => this._settings.disconnect(signalId));
         this._settingsSignalIds = [];
     }
 

@@ -100,12 +100,9 @@ function getTickerMarketSessionProfile(ticker) {
 
 /* Weekend rules are evaluated in the profile timezone rather than the user's local timezone. */
 function isProfileWeekend(profile, date) {
-    const weekday = new Intl.DateTimeFormat('en-US', {
-        timeZone: profile.timeZone,
-        weekday: 'short',
-    }).format(date);
+    const weekday = new Intl.DateTimeFormat('en-US', {timeZone: profile.timeZone, weekday: 'short'}).format(date);
 
-    return profile.weekendDays?.includes(weekday) ?? false;
+    return profile.weekendDays.includes(weekday);
 }
 
 /* Session-window profiles evaluate the active phase from the configured market-local clock. */

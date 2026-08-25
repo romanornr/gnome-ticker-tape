@@ -18,10 +18,7 @@ export async function runTests() {
 async function testServicePipeline() {
     const service = new QuotesService('test-uuid', createSettings([ticker('AAPL', 'aapl.us')]));
     const snapshots = [];
-    let resolveFinalSnapshot;
-    const finalSnapshot = new Promise(resolve => {
-        resolveFinalSnapshot = resolve;
-    });
+    const {promise: finalSnapshot, resolve: resolveFinalSnapshot} = Promise.withResolvers();
     service._providers = [{
         id: 'fixture',
         ownsTicker: () => true,
@@ -83,19 +80,12 @@ async function testProviderHealthEpoch() {
         globalThis.logError = originalLogError;
     }
 
-    assertDeepEqual({
-        warningCount: warnings.length,
-        errorCount: errors.length,
-        degraded: warnings[0]?.includes('returned 1 of 2'),
-        recovered: warnings.at(-1)?.includes('recovered'),
-        failure: errors[0]?.includes('provider unavailable'),
-    }, {
-        warningCount: 2,
-        errorCount: 1,
-        degraded: true,
-        recovered: true,
-        failure: true,
-    }, 'Repeated partial and failed polls should log once per health epoch and once on recovery');
+    assertDeepEqual(warnings, [
+        'test-uuid: fixture quote provider returned 1 of 2 requested quote(s).',
+        'test-uuid: fixture quote provider recovered.',
+    ], 'Repeated partial polls should warn once per health epoch and once on recovery');
+    assertDeepEqual(errors, ['test-uuid: failed to poll fixture quotes: provider unavailable'],
+        'Repeated failures should log one error per health epoch');
 }
 
 function testSettingsReconfigurePipeline() {
@@ -107,8 +97,6 @@ function testSettingsReconfigurePipeline() {
         updateSubscriptions(tickers) {
             callbacks.push(['subscriptions', tickers.map(item => item.symbol)]);
         },
-        stop() {
-        },
     }];
     service._coordinator = {
         scheduleRefreshTimer(interval) {
@@ -117,8 +105,7 @@ function testSettingsReconfigurePipeline() {
         requestRefresh(forced) {
             callbacks.push(['refresh', forced]);
         },
-        stop() {
-        },
+        stop() {},
     };
     service._connectSettingsSignals();
 
@@ -138,24 +125,19 @@ function testSettingsReconfigurePipeline() {
 
 async function testStopRejectsLatePollCompletion() {
     const service = new QuotesService('test-uuid', createSettings([ticker('AAPL', 'aapl.us')]));
-    let finishPoll = null;
+    const {promise: pollCompletion, resolve: finishPoll} = Promise.withResolvers();
     let entryUpdateRequests = 0;
     service._session = {abort() {}};
     service._providers = [{
         id: 'deferred',
         ownsTicker: () => true,
-        poll: () => new Promise(resolve => {
-            finishPoll = resolve;
-        }),
-        stop() {
-        },
+        poll: () => pollCompletion,
     }];
     service._coordinator = {
         requestEntriesUpdate() {
             entryUpdateRequests += 1;
         },
-        stop() {
-        },
+        stop() {},
     };
 
     const refresh = service._refreshQuotes(true);
@@ -172,14 +154,9 @@ async function testStopRejectsLatePollCompletion() {
 
 async function testCoordinatorSingleFlightAndStop() {
     const scopes = [];
-    let finishFirst = null;
-    let resolveSecondPassStarted;
-    const firstPass = new Promise(resolve => {
-        finishFirst = resolve;
-    });
-    const secondPassStarted = new Promise(resolve => {
-        resolveSecondPassStarted = resolve;
-    });
+    const {promise: firstPass, resolve: finishFirst} = Promise.withResolvers();
+    const {promise: secondPassStarted, resolve: resolveSecondPassStarted} = Promise.withResolvers();
+    let rebuilds = 0;
     const coordinator = new QuotesCoordinator({
         onRefresh: async forced => {
             scopes.push(forced);
@@ -188,6 +165,9 @@ async function testCoordinatorSingleFlightAndStop() {
             else
                 resolveSecondPassStarted();
             return true;
+        },
+        onRebuildEntries() {
+            rebuilds += 1;
         },
         networkMonitor: new FakeNetworkMonitor(),
     });
@@ -202,24 +182,23 @@ async function testCoordinatorSingleFlightAndStop() {
     await withTimeout(secondPassStarted, 'Timed out waiting for the queued refresh pass');
     assertDeepEqual(scopes, [false, true],
         'Queued refreshes should coalesce once, with forced scope winning');
+    coordinator.requestEntriesUpdate(true);
+    coordinator.requestEntriesUpdate(false);
+    const pendingUpdateId = coordinator._entriesUpdateTimeoutId;
+    coordinator._lastEntriesUpdateUsec = 0;
+    coordinator.requestEntriesUpdate(false);
+    assertDeepEqual([
+        coordinator._entriesUpdateTimeoutId,
+        GLib.MainContext.default().find_source_by_id(pendingUpdateId),
+        rebuilds,
+    ], [0, null, 2],
+    'A due rebuild should replace an older throttled source instead of running twice');
     coordinator.stop();
 
-    let finishOldPass = null;
-    let finishRestartedPass = null;
-    let resolveRestartedPassStarted = null;
-    let resolveQueuedPassStarted = null;
-    const oldPass = new Promise(resolve => {
-        finishOldPass = resolve;
-    });
-    const restartedPass = new Promise(resolve => {
-        finishRestartedPass = resolve;
-    });
-    const restartedPassStarted = new Promise(resolve => {
-        resolveRestartedPassStarted = resolve;
-    });
-    const queuedPassStarted = new Promise(resolve => {
-        resolveQueuedPassStarted = resolve;
-    });
+    const {promise: oldPass, resolve: finishOldPass} = Promise.withResolvers();
+    const {promise: restartedPass, resolve: finishRestartedPass} = Promise.withResolvers();
+    const {promise: restartedPassStarted, resolve: resolveRestartedPassStarted} = Promise.withResolvers();
+    const {promise: queuedPassStarted, resolve: resolveQueuedPassStarted} = Promise.withResolvers();
     let lateCalls = 0;
     const lateCoordinator = new QuotesCoordinator({
         onRefresh: () => {
@@ -296,28 +275,21 @@ function createSettings(tickers = []) {
             this.handlers.delete(signal);
         },
         trigger(signal) {
-            this.handlers.get(signal)?.();
+            this.handlers.get(signal)();
         },
     };
 }
 
 class FakeNetworkMonitor {
-    constructor() {
-        this.handler = null;
-    }
-
     get_network_available() {
         return true;
     }
 
-    connect(_signal, handler) {
-        this.handler = handler;
+    connect() {
         return 1;
     }
 
-    disconnect(_signalId) {
-        this.handler = null;
-    }
+    disconnect() {}
 }
 
 function withTimeout(promise, message, milliseconds = 1000) {
@@ -329,14 +301,9 @@ function withTimeout(promise, message, milliseconds = 1000) {
             return GLib.SOURCE_REMOVE;
         });
 
-        promise.then(value => {
+        promise.finally(() => {
             if (timeoutPending)
                 GLib.Source.remove(timeoutId);
-            resolve(value);
-        }, error => {
-            if (timeoutPending)
-                GLib.Source.remove(timeoutId);
-            reject(error);
-        });
+        }).then(resolve, reject);
     });
 }

@@ -34,7 +34,7 @@ const MAX_CURATED_SUGGESTIONS = 8;
  * TickerDialogController owns mutable dialog state, catalog search, non-crypto verification, and save wiring.
  * It owns the catalog and verification request lifecycle while prefs.js retains page layout and row actions.
  */
-class TickerDialogController {
+export class TickerDialogController {
     constructor({
         window,
         title,
@@ -45,6 +45,7 @@ class TickerDialogController {
         createComboRow,
         createTextButton,
         findOptionIndex,
+        verifySymbol = verifyTickerSymbol,
     }) {
         this.window = window;
         this.title = title;
@@ -55,6 +56,7 @@ class TickerDialogController {
         this.createComboRow = createComboRow;
         this.createTextButton = createTextButton;
         this.findOptionIndex = findOptionIndex;
+        this.verifySymbol = verifySymbol;
 
         this.activeAssetCategory = initialTicker.assetCategory ?? assetCategoryOptions[0].value;
         this.activeMarketSessionId = getTickerMarketSessionPolicy({...initialTicker, assetCategory: this.activeAssetCategory}).marketSessionId;
@@ -132,7 +134,6 @@ class TickerDialogController {
             title: 'Asset type',
             options: this.assetCategoryOptions,
             selectedValue: this.activeAssetCategory,
-            onSelected: () => {},
         });
         formGroup.add(this.assetCategoryRow);
 
@@ -146,7 +147,6 @@ class TickerDialogController {
             subtitle: 'Kraken supports spot pairs. Hyperliquid supports spot symbols and perps.',
             options: this.cryptoProviderOptions,
             selectedValue: this.activeCryptoProvider || getDefaultCryptoProvider(),
-            onSelected: () => {},
         });
         this.cryptoProviderRow.visible = this.activeAssetCategory === 'crypto';
         formGroup.add(this.cryptoProviderRow);
@@ -192,7 +192,6 @@ class TickerDialogController {
             title: 'Panel side',
             options: this.sideOptions,
             selectedValue: this.initialTicker.panelSide ?? RIGHT_PANEL_SIDE,
-            onSelected: () => {},
         });
         formGroup.add(this.sideRow);
 
@@ -228,10 +227,6 @@ class TickerDialogController {
                 ? this.activeCryptoProvider || getDefaultCryptoProvider()
                 : '';
             this._resetCryptoCatalogState();
-            if (this.activeAssetCategory === 'crypto') {
-                this.verificationRequestId += 1;
-                this.verifyInProgress = false;
-            }
             this._clearVerificationState();
             this._syncMarketSessionRow();
             this.cryptoProviderRow.visible = this.activeAssetCategory === 'crypto';
@@ -284,7 +279,6 @@ class TickerDialogController {
             this.dialog = null;
             this.cryptoCatalogRequestId += 1;
             this.verificationRequestId += 1;
-            this.verifyInProgress = false;
             this.verificationSession.abort();
         });
     }
@@ -352,7 +346,7 @@ class TickerDialogController {
             ? symbolText.trim()
             : symbolText.trim().toLowerCase();
 
-        if (this.lastVerifiedSymbol !== '' && normalizedSymbolText !== this.lastVerifiedSymbol)
+        if (this.verifyInProgress || normalizedSymbolText !== this.lastVerifiedSymbol)
             this._clearVerificationState();
 
         if (this.activeAssetCategory === 'crypto') {
@@ -394,6 +388,8 @@ class TickerDialogController {
 
     /* Any edit that invalidates the previous verification result resets the dialog's verification state here. */
     _clearVerificationState() {
+        this.verificationRequestId += 1;
+        this.verifyInProgress = false;
         this.lastVerifiedSymbol = '';
         this._setVerificationMessage('');
     }
@@ -540,7 +536,7 @@ class TickerDialogController {
         this._setVerificationMessage(`Checking ${symbol}...`);
 
         try {
-            const result = await verifyTickerSymbol(this.verificationSession, symbol, this.activeAssetCategory);
+            const result = await this.verifySymbol(this.verificationSession, symbol, this.activeAssetCategory);
             if (requestId !== this.verificationRequestId)
                 return;
 

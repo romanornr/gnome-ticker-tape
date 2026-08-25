@@ -12,7 +12,6 @@ import {
 import {LEFT_PANEL_SIDE, RIGHT_PANEL_SIDE} from './utils/panel-sides.js';
 import {
     getTickersForSide,
-    hasSettingsKey,
     loadDisplaySettings,
     loadRefreshIntervalSeconds,
     loadTickerConfigs,
@@ -122,15 +121,13 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
             onSelected: value => this._settings.set_string(SETTINGS_KEYS.SEPARATOR_STYLE, value),
         }));
 
-        if (hasSettingsKey(this._settings, SETTINGS_KEYS.FONT_PRESET)) {
-            displayGroup.add(this._createComboRow({
-                title: 'Panel font',
-                subtitle: 'Preset fonts fall back through the system if they are not installed.',
-                options: getFontPresetOptions(),
-                selectedValue: displaySettings.fontPreset,
-                onSelected: value => this._settings.set_string(SETTINGS_KEYS.FONT_PRESET, value),
-            }));
-        }
+        displayGroup.add(this._createComboRow({
+            title: 'Panel font',
+            subtitle: 'Preset fonts fall back through the system if they are not installed.',
+            options: getFontPresetOptions(),
+            selectedValue: displaySettings.fontPreset,
+            onSelected: value => this._settings.set_string(SETTINGS_KEYS.FONT_PRESET, value),
+        }));
     }
 
     /* Saved ticker changes always rerender the visible row list through this one rebuild path. */
@@ -265,7 +262,6 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
             title: 'Asset type',
             options: this._assetCategoryOptions,
             selectedValue: initialAssetCategory,
-            onSelected: () => {},
         });
         group.add(categoryRow);
 
@@ -274,9 +270,7 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
             if (responseId !== 'continue')
                 return;
 
-            const selectedAssetCategory = this._assetCategoryOptions[categoryRow.selected]?.value;
-            if (selectedAssetCategory !== undefined)
-                onSelected(selectedAssetCategory);
+            onSelected(this._assetCategoryOptions[categoryRow.selected].value);
         });
 
         dialog.present(this._window);
@@ -304,17 +298,14 @@ class TickerPreferencesPage extends Adw.PreferencesPage {
     }
 
     /* Combo rows are reused across prefs and dialog helpers to keep option rendering behavior consistent. */
-    _createComboRow({title, subtitle = '', options, selectedValue, onSelected}) {
+    _createComboRow({title, subtitle = '', options, selectedValue, onSelected = null}) {
         const stringList = Gtk.StringList.new(options.map(option => option.title));
         const row = new Adw.ComboRow({title, subtitle, model: stringList});
 
         const selectedIndex = Math.max(0, options.findIndex(option => option.value === selectedValue));
         row.selected = selectedIndex;
-        row.connect('notify::selected', widget => {
-            const option = options[widget.selected];
-            if (option)
-                onSelected(option.value);
-        });
+        if (onSelected)
+            row.connect('notify::selected', widget => onSelected(options[widget.selected].value));
 
         return row;
     }

@@ -92,7 +92,7 @@ export const DEFAULT_TICKERS = [
 ].map(withDefaultMarketSession);
 
 export function loadTickerConfigs(settings) {
-    const serialized = settings?.get_string(SETTINGS_KEYS.TICKERS_JSON) ?? '';
+    const serialized = settings.get_string(SETTINGS_KEYS.TICKERS_JSON);
     if (serialized.trim() === '')
         return cloneTickers(DEFAULT_TICKERS);
 
@@ -127,37 +127,33 @@ export function resetTickerConfigs(settings) {
 
 export function loadDisplaySettings(settings) {
     const formatPreset = normalizeEnum(
-        settings?.get_string(SETTINGS_KEYS.FORMAT_PRESET),
+        settings.get_string(SETTINGS_KEYS.FORMAT_PRESET),
         FORMAT_PRESETS,
         DEFAULT_DISPLAY_SETTINGS.formatPreset
     );
     const separatorStyle = normalizeEnum(
-        settings?.get_string(SETTINGS_KEYS.SEPARATOR_STYLE),
+        settings.get_string(SETTINGS_KEYS.SEPARATOR_STYLE),
         SEPARATOR_STYLES,
         DEFAULT_DISPLAY_SETTINGS.separatorStyle
     );
     const fontPreset = normalizeEnum(
-        getOptionalStringSetting(settings, SETTINGS_KEYS.FONT_PRESET),
+        settings.get_string(SETTINGS_KEYS.FONT_PRESET),
         FONT_PRESETS,
         DEFAULT_DISPLAY_SETTINGS.fontPreset
     );
 
     return {
         formatPreset,
-        showPrice: settings?.get_boolean(SETTINGS_KEYS.SHOW_PRICE) ?? DEFAULT_DISPLAY_SETTINGS.showPrice,
-        showArrow: settings?.get_boolean(SETTINGS_KEYS.SHOW_ARROW) ?? DEFAULT_DISPLAY_SETTINGS.showArrow,
-        showPercent: settings?.get_boolean(SETTINGS_KEYS.SHOW_PERCENT) ?? DEFAULT_DISPLAY_SETTINGS.showPercent,
+        showPrice: settings.get_boolean(SETTINGS_KEYS.SHOW_PRICE),
+        showArrow: settings.get_boolean(SETTINGS_KEYS.SHOW_ARROW),
+        showPercent: settings.get_boolean(SETTINGS_KEYS.SHOW_PERCENT),
         separatorStyle,
         fontPreset,
     };
 }
 
-export function hasSettingsKey(settings, key) {
-    return settings?.settings_schema?.has_key(key) ?? false;
-}
-
 export function loadRefreshIntervalSeconds(settings) {
-    const interval = settings?.get_uint(SETTINGS_KEYS.REFRESH_INTERVAL_SECONDS) ?? DEFAULT_REFRESH_INTERVAL_SECONDS;
+    const interval = settings.get_uint(SETTINGS_KEYS.REFRESH_INTERVAL_SECONDS);
     return Number.isInteger(interval) && interval > 0 ? interval : DEFAULT_REFRESH_INTERVAL_SECONDS;
 }
 
@@ -171,11 +167,4 @@ function cloneTickers(tickers) {
 
 function normalizeEnum(value, enumValues, fallback) {
     return Object.values(enumValues).includes(value) ? value : fallback;
-}
-
-function getOptionalStringSetting(settings, key) {
-    if (!hasSettingsKey(settings, key))
-        return null;
-
-    return settings.get_string(key);
 }

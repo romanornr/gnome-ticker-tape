@@ -14,14 +14,14 @@ export function normalizeKrakenTickerSymbol(value) {
 
 /* Search scoring prefers strong Kraken pair matches while still supporting fuzzy asset/pair queries. */
 export function scoreKrakenCatalogEntry(entry, query) {
-    const normalizedQuery = normalizeKrakenSearchQuery(query);
+    const normalizedQuery = normalizeProviderSearchQuery(query);
     if (normalizedQuery === '') return Number.NEGATIVE_INFINITY;
 
-    const normalizedLiveSymbol = normalizeKrakenSearchQuery(entry.liveSymbol);
-    const normalizedCompactSymbol = normalizeKrakenSearchQuery(entry.symbol);
-    const normalizedBase = normalizeKrakenSearchQuery(entry.base);
-    const normalizedLabel = normalizeKrakenSearchQuery(entry.label);
-    const normalizedQuote = normalizeKrakenSearchQuery(entry.quote);
+    const normalizedLiveSymbol = normalizeProviderSearchQuery(entry.liveSymbol);
+    const normalizedCompactSymbol = normalizeProviderSearchQuery(entry.symbol);
+    const normalizedBase = normalizeProviderSearchQuery(entry.base);
+    const normalizedLabel = normalizeProviderSearchQuery(entry.label);
+    const normalizedQuote = normalizeProviderSearchQuery(entry.quote);
 
     let score = -1;
 
@@ -58,12 +58,7 @@ export function scoreKrakenCatalogEntry(entry, query) {
 }
 
 /* Quote-priority is a search/ranking signal, not a market-data value. */
-function getKrakenQuotePriority(quote) {
+export function getKrakenQuotePriority(quote) {
     const index = KRAKEN_SPOT_PAIR_QUOTE_PRIORITY.indexOf(`${quote ?? ''}`.trim().toUpperCase());
     return index === -1 ? KRAKEN_SPOT_PAIR_QUOTE_PRIORITY.length : index;
-}
-
-/* Search normalization makes Kraken labels, compact symbols, and pair strings comparable. */
-function normalizeKrakenSearchQuery(value) {
-    return normalizeProviderSearchQuery(value);
 }

@@ -28,19 +28,14 @@ export async function loadHyperliquidMarkets() {
 /* prefs search and REST fallback both use the same snapshot builder so market lists stay consistent. */
 export async function fetchHyperliquidMarketSnapshots(session) {
     const [perpsResponse, spotsResponse] = await Promise.all([
-        postHyperliquidInfo(session, {type: 'metaAndAssetCtxs'}),
-        postHyperliquidInfo(session, {type: 'spotMetaAndAssetCtxs'}),
+        httpPostJson(session, HYPERLIQUID_API_URL, {type: 'metaAndAssetCtxs'}),
+        httpPostJson(session, HYPERLIQUID_API_URL, {type: 'spotMetaAndAssetCtxs'}),
     ]);
 
     return {
         perps: buildHyperliquidPerpEntries(perpsResponse),
         spots: buildHyperliquidSpotEntries(spotsResponse),
     };
-}
-
-/* All Hyperliquid REST calls use the same POST helper so transport details stay out of callers. */
-export function postHyperliquidInfo(session, body) {
-    return httpPostJson(session ?? new Soup.Session(), HYPERLIQUID_API_URL, body);
 }
 
 /* Cached market lists are cloned before returning so callers cannot mutate shared provider state. */

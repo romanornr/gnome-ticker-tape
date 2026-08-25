@@ -3,6 +3,7 @@ import Soup from 'gi://Soup?version=3.0';
 
 import {ASSET_CATEGORIES, CRYPTO_PROVIDERS, withDefaultMarketSession} from '../../asset-categories.js';
 import {
+    getKrakenQuotePriority,
     normalizeKrakenLiveSymbol,
     normalizeKrakenTickerSymbol,
 } from './symbols.js';
@@ -11,7 +12,6 @@ export const KRAKEN_WEBSOCKET_URL = 'wss://ws.kraken.com/v2';
 
 const KRAKEN_INSTRUMENT_TIMEOUT_SECONDS = 15;
 const KRAKEN_INSTRUMENT_MAX_INCOMING_PAYLOAD_SIZE = 32 * 1024 * 1024;
-const KRAKEN_SPOT_PAIR_QUOTE_PRIORITY = ['USD', 'EUR', 'USDT', 'USDC', 'BTC', 'ETH'];
 
 let cachedKrakenSpotPairsPromise = null;
 
@@ -179,9 +179,4 @@ function compareKrakenCatalogEntries(left, right) {
     if (left.base === right.base && priorityDifference !== 0) return priorityDifference;
 
     return left.label.localeCompare(right.label);
-}
-
-function getKrakenQuotePriority(quote) {
-    const index = KRAKEN_SPOT_PAIR_QUOTE_PRIORITY.indexOf(`${quote ?? ''}`.trim().toUpperCase());
-    return index === -1 ? KRAKEN_SPOT_PAIR_QUOTE_PRIORITY.length : index;
 }

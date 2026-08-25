@@ -49,9 +49,7 @@ export class KrakenProvider extends LiveWebsocketProvider {
         if (!session || tickers.length === 0) return new Map();
 
         const quotesByPair = await krakenAdapter.fetchTickerQuotes(
-            session,
-            [...new Set(tickers.map(ticker => ticker.liveSymbol))]
-        );
+            session, [...new Set(tickers.map(ticker => ticker.liveSymbol))]);
         const quotesBySymbol = new Map();
 
         tickers.forEach(ticker => {
@@ -110,7 +108,7 @@ export class KrakenProvider extends LiveWebsocketProvider {
             if (!tickerSymbol || !quote)
                 return;
 
-            this._reportedRejectedSymbols.delete(entry.symbol);
+            this._clearAcknowledgedRejections(entry.symbol);
             updatedQuotes.set(tickerSymbol, quote);
         });
 
@@ -129,7 +127,7 @@ export class KrakenProvider extends LiveWebsocketProvider {
     }
 
     _clearAcknowledgedRejections(symbols) {
-        const acknowledgedSymbols = Array.isArray(symbols) ? symbols : [symbols];
+        const acknowledgedSymbols = Array.isArray(symbols) ? ['*', ...symbols] : ['*', symbols];
         acknowledgedSymbols.filter(Boolean).forEach(symbol => this._reportedRejectedSymbols.delete(symbol));
     }
 }

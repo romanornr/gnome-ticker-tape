@@ -30,7 +30,6 @@ export default class TickerPriceExtension extends Extension {
     enable() {
         this._leftIndicator = null;
         this._rightIndicator = null;
-        this._quotesChangedId = 0;
         this._settings = this.getSettings();
         this._quotesService = new QuotesService(this.uuid, this._settings);
         this._quotesChangedId = this._quotesService.connect('entries-changed', () => {
@@ -41,11 +40,8 @@ export default class TickerPriceExtension extends Extension {
 
     /* disable() releases the signal, runtime service, actors, and settings in ownership order. */
     disable() {
-        if (this._quotesService && this._quotesChangedId !== 0)
-            this._quotesService.disconnect(this._quotesChangedId);
-        this._quotesChangedId = 0;
-
-        this._quotesService?.stop();
+        this._quotesService.disconnect(this._quotesChangedId);
+        this._quotesService.stop();
         this._quotesService = null;
 
         this._leftIndicator?.destroy();

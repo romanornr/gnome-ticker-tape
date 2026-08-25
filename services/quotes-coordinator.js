@@ -36,10 +36,7 @@ export class QuotesCoordinator {
         this._restRetryTimeoutId = 0;
         this._restRetryAttempt = 0;
         this._entriesUpdateTimeoutId = 0;
-        this._entriesUpdateInProgress = false;
-        this._entriesUpdateQueued = false;
         this._lastEntriesUpdateUsec = 0;
-        this._entryRebuildFailureReported = false;
         this._priceFlashTimeoutId = 0;
     }
 
@@ -56,10 +53,7 @@ export class QuotesCoordinator {
         this._refreshInProgress = false;
         this._refreshQueued = null;
         this._restRetryAttempt = 0;
-        this._entriesUpdateInProgress = false;
-        this._entriesUpdateQueued = false;
         this._lastEntriesUpdateUsec = 0;
-        this._entryRebuildFailureReported = false;
     }
 
     /*
@@ -87,7 +81,7 @@ export class QuotesCoordinator {
         );
     }
 
-    /* Refresh requests share the entry-update single-flight shape; a queued forced pass wins on merge. */
+    /* Refresh requests are single-flight; a queued forced pass wins on merge. */
     requestRefresh(forced = false) {
         if (this._networkMonitorSignalId === 0)
             return;
@@ -105,20 +99,14 @@ export class QuotesCoordinator {
         if (this._networkMonitorSignalId === 0)
             return;
 
-        if (this._entriesUpdateInProgress) {
-            this._entriesUpdateQueued = true;
-            return;
-        }
-
         if (immediate) {
-            this._entriesUpdateTimeoutId = removeTimeout(this._entriesUpdateTimeoutId);
-            void this._runEntriesUpdate();
+            this._runEntriesUpdate();
             return;
         }
 
         const elapsedSeconds = (GLib.get_monotonic_time() - this._lastEntriesUpdateUsec) / 1_000_000;
         if (this._lastEntriesUpdateUsec === 0 || elapsedSeconds >= CRYPTO_UI_UPDATE_INTERVAL_SECONDS) {
-            void this._runEntriesUpdate();
+            this._runEntriesUpdate();
             return;
         }
 
@@ -132,7 +120,7 @@ export class QuotesCoordinator {
             remainingMs,
             () => {
                 this._entriesUpdateTimeoutId = 0;
-                void this._runEntriesUpdate();
+                this._runEntriesUpdate();
                 return GLib.SOURCE_REMOVE;
             }
         );
@@ -156,33 +144,11 @@ export class QuotesCoordinator {
         );
     }
 
-    /* The queued/in-progress bookkeeping ensures bursty live updates collapse into a stable rebuild sequence. */
-    async _runEntriesUpdate() {
-        if (this._entriesUpdateInProgress)
-            return;
-
-        const lifecycleGeneration = this._lifecycleGeneration;
-        this._entriesUpdateInProgress = true;
-
-        try {
-            await this._onRebuildEntries();
-            if (this._isCurrentLifecycle(lifecycleGeneration))
-                this._entryRebuildFailureReported = false;
-        } catch (error) {
-            if (this._isCurrentLifecycle(lifecycleGeneration) && !this._entryRebuildFailureReported) {
-                this._entryRebuildFailureReported = true;
-                logError(error, 'Ticker Tape: entry rebuild failed');
-            }
-        } finally {
-            if (this._isCurrentLifecycle(lifecycleGeneration)) {
-                this._entriesUpdateInProgress = false;
-                this._lastEntriesUpdateUsec = GLib.get_monotonic_time();
-                const shouldRunQueuedUpdate = this._entriesUpdateQueued;
-                this._entriesUpdateQueued = false;
-                if (shouldRunQueuedUpdate)
-                    this.requestEntriesUpdate(false);
-            }
-        }
+    /* Every rebuild clears an older source before resetting the synchronous throttle window. */
+    _runEntriesUpdate() {
+        this._entriesUpdateTimeoutId = removeTimeout(this._entriesUpdateTimeoutId);
+        this._lastEntriesUpdateUsec = GLib.get_monotonic_time();
+        this._onRebuildEntries();
     }
 
     async _runRefresh(forced) {
@@ -198,20 +164,15 @@ export class QuotesCoordinator {
                 this._resetRestRetry();
             else if (this._isCurrentLifecycle(lifecycleGeneration) && directRestOutcome === false)
                 this._scheduleRestRetry();
-        } catch (error) {
-            if (this._isCurrentLifecycle(lifecycleGeneration))
-                logError(error, 'Ticker Tape: refresh pass failed');
         } finally {
-            if (this._isCurrentLifecycle(lifecycleGeneration))
+            if (this._isCurrentLifecycle(lifecycleGeneration)) {
                 this._refreshInProgress = false;
+                const queuedForced = this._refreshQueued;
+                this._refreshQueued = null;
+                if (queuedForced !== null)
+                    this.requestRefresh(queuedForced);
+            }
         }
-
-        if (!this._isCurrentLifecycle(lifecycleGeneration) || this._refreshQueued === null)
-            return;
-
-        const queuedForced = this._refreshQueued;
-        this._refreshQueued = null;
-        this.requestRefresh(queuedForced);
     }
 
     /* Async completions may mutate timing state only within the lifecycle that started them. */

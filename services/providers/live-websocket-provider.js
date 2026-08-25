@@ -197,14 +197,7 @@ export class LiveWebsocketProvider {
         }
 
         this._pendingConnection = null;
-        try {
-            this._adoptWebsocket(websocket, attempt.symbols);
-        } catch (error) {
-            this._recoverTransport({
-                error,
-                message: `failed to initialize ${this._name} websocket`,
-            });
-        }
+        this._adoptWebsocket(websocket, attempt.symbols);
     }
 
     _isCurrentConnectionAttempt(attempt) {

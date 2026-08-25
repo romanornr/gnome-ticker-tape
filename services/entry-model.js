@@ -40,12 +40,10 @@ export function clearPriceFlash(entries) {
 
 /* Price flash compares the new view-model to the previous render, not to raw quotes. */
 function decorateEntriesWithPriceFlash(entries, previousEntries) {
-    const previousEntriesBySymbol = new Map(
-        previousEntries.map(entry => [entry.symbol?.toUpperCase() ?? entry.label, entry])
-    );
+    const previousEntriesBySymbol = new Map(previousEntries.map(entry => [entry.symbol.toUpperCase(), entry]));
 
     return entries.map(entry => {
-        const previousEntry = previousEntriesBySymbol.get(entry.symbol?.toUpperCase() ?? entry.label);
+        const previousEntry = previousEntriesBySymbol.get(entry.symbol.toUpperCase());
         const previousPrice = previousEntry?.displayPrice;
 
         if (
