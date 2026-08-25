@@ -57,9 +57,9 @@ Trace failures in this order:
 Check the first boundary whose output is wrong. Avoid adding guards in later
 layers to conceal invalid data from an earlier one.
 
-## REST Providers
+## Market Providers
 
-`services/providers/rest-quotes.js` coordinates CNBC with narrow Nasdaq and FX
+`providers/market-quotes.js` coordinates CNBC with narrow Nasdaq and FX
 fallbacks. Nasdaq covers U.S. listings plus NDX. When debugging a response, inspect:
 
 - HTTP status and error body;
@@ -76,8 +76,9 @@ curl -A 'test/1.0' 'https://quote.cnbc.com/quote-html-webservice/restQuote/symbo
 ```
 
 An invalid envelope or non-success HTTP response is an error, not an empty
-successful quote set. Synthetic FX and DXY quotes use the oldest component date
-so a stale component cannot make the result appear fresh.
+successful quote set. Synthetic FX uses the oldest component date; DXY uses
+CNBC's direct `.DXY` quote. An incomplete poll logs its missing symbols once
+until a complete poll reports recovery.
 
 ## Live Crypto Providers
 

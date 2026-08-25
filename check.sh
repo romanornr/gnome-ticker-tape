@@ -46,7 +46,7 @@ unzip -tq "${ARCHIVE}"
 
 {
     printf '%s\n' LICENSE extension.js metadata.json prefs.js
-    find services ui utils -type f -name '*.js' -print
+    find providers services ui utils -type f -name '*.js' -print
     find schemas -type f -name '*.xml' -print
 } | LC_ALL=C sort > "${EXPECTED_FILES}"
 

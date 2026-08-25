@@ -7,8 +7,8 @@ import {
     getCryptoProviderOptions,
     getDefaultCryptoProvider,
 } from '../asset-categories.js';
-import {loadHyperliquidMarkets} from '../crypto-providers/hyperliquid/catalog.js';
-import {loadKrakenSpotPairs} from '../crypto-providers/kraken/catalog.js';
+import {loadHyperliquidMarkets} from '../../providers/hyperliquid/catalog.js';
+import {loadKrakenSpotPairs} from '../../providers/kraken/catalog.js';
 import {LEFT_PANEL_SIDE, RIGHT_PANEL_SIDE} from '../panel-sides.js';
 import {matchCuratedTickers} from '../ticker-catalog.js';
 

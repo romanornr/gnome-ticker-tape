@@ -1,5 +1,5 @@
-import {ASSET_CATEGORIES} from '../../utils/asset-categories.js';
-import {DEFAULT_HTTP_TIMEOUT_SECONDS, httpGetJson} from '../../utils/http.js';
+import {ASSET_CATEGORIES} from '../utils/asset-categories.js';
+import {DEFAULT_HTTP_TIMEOUT_SECONDS, httpGetJson} from './http.js';
 
 const NASDAQ_USER_AGENT = 'ticker-tape-gnome-extension/1.0';
 const NASDAQ_QUOTE_ENDPOINT = 'https://api.nasdaq.com/api/quote';

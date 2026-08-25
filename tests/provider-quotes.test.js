@@ -1,13 +1,13 @@
 import GLib from 'gi://GLib';
 
 import {ASSET_CATEGORIES} from '../utils/asset-categories.js';
-import {deriveFxQuote, parseRestQuoteResponse, refresh as refreshCnbc} from '../services/providers/cnbc.js';
-import {parseQuoteResponse as parseNasdaqQuote, refresh as refreshNasdaq} from '../services/providers/nasdaq.js';
-import {restProvider} from '../services/providers/rest-quotes.js';
-import {fetchHyperliquidContexts} from '../utils/crypto-providers/hyperliquid/catalog.js';
-import {createHyperliquidQuote} from '../utils/crypto-providers/hyperliquid/quotes.js';
-import {parseKrakenTickerQuotes} from '../utils/crypto-providers/kraken/quotes.js';
-import {httpGetJson} from '../utils/http.js';
+import {deriveFxQuote, parseRestQuoteResponse, refresh as refreshCnbc} from '../providers/cnbc/quotes.js';
+import {fetchHyperliquidContexts} from '../providers/hyperliquid/catalog.js';
+import {createHyperliquidQuote} from '../providers/hyperliquid/quotes.js';
+import {parseKrakenTickerQuotes} from '../providers/kraken/quotes.js';
+import {marketQuotesProvider} from '../providers/market-quotes.js';
+import {parseQuoteResponse as parseNasdaqQuote, refresh as refreshNasdaq} from '../providers/nasdaq.js';
+import {httpGetJson} from '../providers/http.js';
 import {assertDeepEqual, assertEqual} from './support/assert.js';
 
 export async function runTests() {
@@ -106,22 +106,22 @@ async function testNasdaqFallback() {
 
 async function testRestComposition() {
     const completeSession = new FakeSession([{status: 200, body: {FormattedQuoteResult: {FormattedQuote: cnbcQuote('AAPL')}}}]);
-    const complete = await restProvider.poll([ticker('aapl.us')], {session: completeSession});
+    const complete = await marketQuotesProvider.poll([ticker('aapl.us')], {session: completeSession});
     assertDeepEqual([complete.size, completeSession.requests.length], [1, 1], 'A complete CNBC pass should not run fallbacks');
     const session = new FakeSession([
         {status: 200, body: {FormattedQuoteResult: {FormattedQuote: []}}},
         {status: 200, body: nasdaqPayload()}, {status: 200, body: nasdaqPayload()},
         {status: 200, body: {result: 'success', time_last_update_unix: 1787616000, rates: {USD: 1, EUR: 0.8}}},
     ]);
-    const recovered = await restProvider.poll([
+    const recovered = await marketQuotesProvider.poll([
         ticker('uso.us', ASSET_CATEGORIES.COMMODITY), ticker('^ndq'), ticker('eurusd', ASSET_CATEGORIES.FX),
     ], {session});
     assertDeepEqual([...recovered.keys()].sort(), ['EURUSD', 'USO.US', '^NDQ'], 'REST should combine all fallback results');
-    const cnbcFailure = await rejectionMessage(restProvider.poll([ticker('a.us')], {session: new FakeSession([
+    const cnbcFailure = await rejectionMessage(marketQuotesProvider.poll([ticker('a.us')], {session: new FakeSession([
         {error: new Error('CNBC failed')}, {error: new Error('Nasdaq failed')},
     ])}));
     assertEqual(cnbcFailure, 'CNBC failed', 'REST should prefer the CNBC error when every provider fails');
-    const fallbackFailure = await rejectionMessage(restProvider.poll([ticker('a.us')], {session: new FakeSession([
+    const fallbackFailure = await rejectionMessage(marketQuotesProvider.poll([ticker('a.us')], {session: new FakeSession([
         {status: 200, body: {FormattedQuoteResult: {FormattedQuote: []}}}, {error: new Error('Nasdaq failed')},
     ])}));
     assertEqual(fallbackFailure, 'Nasdaq failed', 'REST should throw the first fallback error after an empty CNBC pass');

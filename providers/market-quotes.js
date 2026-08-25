@@ -1,6 +1,6 @@
-import {isLiveCryptoTicker} from '../../utils/asset-categories.js';
+import {isLiveCryptoTicker} from '../utils/asset-categories.js';
 
-import {refresh as refreshCnbcQuotes} from './cnbc.js';
+import {refresh as refreshCnbcQuotes} from './cnbc/quotes.js';
 import {refresh as refreshNasdaqQuotes} from './nasdaq.js';
 import {refresh as refreshFallbackFxQuotes} from './open-er-api.js';
 
@@ -34,8 +34,8 @@ async function refresh(tickers, context) {
     return quotesBySymbol;
 }
 
-export const restProvider = {
-    id: 'rest',
+export const marketQuotesProvider = {
+    id: 'market',
     ownsTicker: ticker => !isLiveCryptoTicker(ticker),
     selectPollTickers: tickers => tickers,
     poll: refresh,

@@ -12,9 +12,9 @@ GNOME Shell extension (GJS/ESM, Shell 49–50) showing market tickers in the top
 ## Architecture Canon
 
 - Catalog and settings symbols stay in historical Stooq-style form (`aapl.us`, `700.hk`, `eurusd`); providers translate at their boundary. Never change saved-symbol format — user gsettings contain it.
-- Non-crypto quotes come from CNBC batches; symbol grammar mapping lives in
-  `services/providers/cnbc-symbols.js`. FX pairs derive from the USD spot vector.
-- `QuotesService` composes direct REST, Kraken, and Hyperliquid providers. Each
+- Market quotes come from CNBC batches; symbol grammar mapping lives in
+  `providers/cnbc/symbols.js`. FX pairs derive from the USD spot vector; DXY is direct.
+- `QuotesService` composes the market, Kraken, and Hyperliquid providers. Each
   live symbol keeps REST fallback until its first valid WebSocket quote.
 - Normalized quote shape everywhere past the provider boundary: `{price, quoteDate: 'YYYYMMDD', previousClose|null}` keyed by uppercase catalog symbol.
 - `AGENTS.md` holds the file map and data/API conventions; update it in the same change when key files are added, renamed, or removed.

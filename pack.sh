@@ -24,6 +24,7 @@ gnome-extensions pack \
     --force \
     --out-dir="${OUTPUT_DIR}" \
     --extra-source=LICENSE \
+    --extra-source=providers \
     --extra-source=ui \
     --extra-source=services \
     --extra-source=utils \

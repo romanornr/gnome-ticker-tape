@@ -1,7 +1,7 @@
 import Soup from 'gi://Soup?version=3.0';
 
-import {ASSET_CATEGORIES, CRYPTO_PROVIDERS} from '../../asset-categories.js';
-import {httpPostJson} from '../../http.js';
+import {ASSET_CATEGORIES, CRYPTO_PROVIDERS} from '../../utils/asset-categories.js';
+import {httpPostJson} from '../http.js';
 import {normalizeHyperliquidLiveSymbol, normalizeHyperliquidTickerSymbol} from './symbols.js';
 
 const HYPERLIQUID_API_URL = 'https://api.hyperliquid.xyz/info';

@@ -1,5 +1,5 @@
-import {DEFAULT_HTTP_TIMEOUT_SECONDS, httpGetJson} from '../../utils/http.js';
-import {parseFxPairSymbol} from './cnbc-symbols.js';
+import {DEFAULT_HTTP_TIMEOUT_SECONDS, httpGetJson} from './http.js';
+import {parseFxPairSymbol} from './cnbc/symbols.js';
 
 const ER_API_ENDPOINT = 'https://open.er-api.com/v6/latest/USD';
 

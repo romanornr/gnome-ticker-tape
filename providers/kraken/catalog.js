@@ -1,7 +1,7 @@
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
-import {ASSET_CATEGORIES, CRYPTO_PROVIDERS} from '../../asset-categories.js';
+import {ASSET_CATEGORIES, CRYPTO_PROVIDERS} from '../../utils/asset-categories.js';
 import {normalizeKrakenLiveSymbol, normalizeKrakenTickerSymbol} from './symbols.js';
 
 export const KRAKEN_WEBSOCKET_URL = 'wss://ws.kraken.com/v2';

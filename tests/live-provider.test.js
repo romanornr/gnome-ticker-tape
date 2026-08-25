@@ -1,6 +1,6 @@
 import Soup from 'gi://Soup?version=3.0';
 
-import {KrakenProvider} from '../services/providers/kraken-live.js';
+import {KrakenProvider} from '../providers/kraken/provider.js';
 import {ASSET_CATEGORIES, CRYPTO_PROVIDERS} from '../utils/asset-categories.js';
 import {assertDeepEqual} from './support/assert.js';
 

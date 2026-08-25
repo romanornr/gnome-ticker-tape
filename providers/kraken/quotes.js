@@ -1,4 +1,4 @@
-import {httpGetJson} from '../../http.js';
+import {httpGetJson} from '../http.js';
 
 const KRAKEN_REST_TICKER_URL = 'https://api.kraken.com/0/public/Ticker';
 

@@ -2,7 +2,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
-import {isLiveCryptoTicker} from '../../utils/asset-categories.js';
+import {isLiveCryptoTicker} from '../utils/asset-categories.js';
 
 const LIVE_CRYPTO_RECONNECT_DELAYS_SECONDS = [2, 5, 10, 20, 30, 60];
 const LIVE_SILENCE_TIMEOUT_SECONDS = 60;

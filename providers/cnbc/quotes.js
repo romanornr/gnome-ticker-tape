@@ -1,10 +1,10 @@
-import {DEFAULT_HTTP_TIMEOUT_SECONDS, httpGetJson} from '../../utils/http.js';
+import {DEFAULT_HTTP_TIMEOUT_SECONDS, httpGetJson} from '../http.js';
 import {
     buildFxSpotSymbol,
     mapSymbolToCnbc,
     parseFxPairSymbol,
     toUsdPerUnit,
-} from './cnbc-symbols.js';
+} from './symbols.js';
 
 const CNBC_BATCH_SIZE = 30;
 const CNBC_USER_AGENT = 'ticker-tape-gnome-extension/1.0';

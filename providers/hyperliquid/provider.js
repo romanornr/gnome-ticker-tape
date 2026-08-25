@@ -2,10 +2,10 @@ import {CRYPTO_PROVIDERS} from '../../utils/asset-categories.js';
 import {
     fetchHyperliquidContexts,
     HYPERLIQUID_WEBSOCKET_URL,
-} from '../../utils/crypto-providers/hyperliquid/catalog.js';
-import {createHyperliquidQuote} from '../../utils/crypto-providers/hyperliquid/quotes.js';
-import {normalizeHyperliquidLiveSymbol} from '../../utils/crypto-providers/hyperliquid/symbols.js';
-import {LiveWebsocketProvider} from './live-websocket-provider.js';
+} from './catalog.js';
+import {createHyperliquidQuote} from './quotes.js';
+import {normalizeHyperliquidLiveSymbol} from './symbols.js';
+import {LiveWebsocketProvider} from '../live-websocket-provider.js';
 
 /*
  * HyperliquidProvider supplies REST snapshots and protocol hooks to the shared websocket lifecycle.

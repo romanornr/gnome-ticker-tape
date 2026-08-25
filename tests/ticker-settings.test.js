@@ -3,9 +3,9 @@ import {
     CRYPTO_PROVIDERS,
     getTickerMarketSessionId,
 } from '../utils/asset-categories.js';
-import {HyperliquidProvider} from '../services/providers/hyperliquid-live.js';
-import {KrakenProvider} from '../services/providers/kraken-live.js';
-import {restProvider} from '../services/providers/rest-quotes.js';
+import {HyperliquidProvider} from '../providers/hyperliquid/provider.js';
+import {KrakenProvider} from '../providers/kraken/provider.js';
+import {marketQuotesProvider} from '../providers/market-quotes.js';
 import {MARKET_SESSION_IDS} from '../utils/market-sessions.js';
 import {matchCuratedTickers} from '../utils/ticker-catalog.js';
 import {normalizeTickerConfig, serializeTickerConfig} from '../utils/ticker-config.js';
@@ -63,8 +63,8 @@ function testSearchAndProviderIsolation() {
             cryptoProvider: CRYPTO_PROVIDERS.HYPERLIQUID,
         }).map(entry => entry.cryptoProvider),
         ownership: [
-            restProvider.ownsTicker(ticker('AAPL', 'aapl.us', ASSET_CATEGORIES.EQUITY)),
-            restProvider.ownsTicker(krakenTicker),
+            marketQuotesProvider.ownsTicker(ticker('AAPL', 'aapl.us', ASSET_CATEGORIES.EQUITY)),
+            marketQuotesProvider.ownsTicker(krakenTicker),
             kraken.ownsTicker(krakenTicker),
             kraken.ownsTicker(hyperliquidTicker),
             hyperliquid.ownsTicker(hyperliquidTicker),

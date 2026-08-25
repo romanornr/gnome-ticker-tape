@@ -86,7 +86,8 @@ contain perpetual futures such as `BTC`.
 CNBC is the primary batched REST source for non-crypto quotes. Nasdaq is a
 narrow fallback for missed U.S. listings plus NDX, and open.er-api.com supplies an FX
 rate-table fallback. Saved catalog symbols retain their historical form while
-`services/providers/cnbc-symbols.js` translates them for CNBC.
+`providers/cnbc/symbols.js` translates them for CNBC. FX pairs derive from CNBC's
+USD spot vector; DXY uses CNBC's direct `.DXY` quote.
 
 | Feature | Kraken | Hyperliquid |
 |---|---|---|
@@ -109,14 +110,11 @@ between entries and the polling interval. The default interval is five minutes.
 
 - `extension.js` owns Shell lifecycle, settings, and panel indicators.
 - `prefs.js` and `utils/prefs/` own the catalog-based preferences UI.
-- `services/quotes.js` composes providers, `QuoteStore`, and entry updates.
-- `services/quote-update-scheduler.js` owns polling and display timers.
-- `services/providers/` owns REST and WebSocket transports.
-- `utils/crypto-providers/kraken/` and `hyperliquid/` own provider-specific
-  symbols, catalogs, and quote normalization.
-- `utils/catalog/` contains the curated non-crypto catalog.
+- `providers/` owns process-neutral market-data I/O, catalogs, and normalization.
+- `services/` owns Shell-runtime quote state, scheduling, and entry updates.
+- `utils/` owns generic support, preferences helpers, and curated catalogs.
 
-Shell UI code and preferences UI code run in separate processes. Shared modules
+Shell UI and preferences run in separate processes. Provider and utility modules
 must not import either process's UI libraries.
 
 ## Edit The Curated Catalog
@@ -149,7 +147,7 @@ Run the complete local check:
 
 It runs ESLint, the behavior-oriented GJS tests, builds the release archive, and
 compares its production inventory with the source tree. The tests cover market
-schedules, current ticker settings, presentation, REST normalization/fallbacks,
+schedules, current ticker settings, presentation, provider normalization/fallbacks,
 live-provider lifecycle, and quote-service behavior.
 
 Run the packaged Shell lifecycle smoke test where its GNOME runtime dependencies

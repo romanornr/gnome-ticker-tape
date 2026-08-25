@@ -1,10 +1,10 @@
 import {CRYPTO_PROVIDERS} from '../../utils/asset-categories.js';
-import {KRAKEN_WEBSOCKET_URL} from '../../utils/crypto-providers/kraken/catalog.js';
+import {KRAKEN_WEBSOCKET_URL} from './catalog.js';
 import {
     createKrakenQuote,
     fetchKrakenTickerQuotes,
-} from '../../utils/crypto-providers/kraken/quotes.js';
-import {LiveWebsocketProvider} from './live-websocket-provider.js';
+} from './quotes.js';
+import {LiveWebsocketProvider} from '../live-websocket-provider.js';
 
 /*
  * KrakenProvider owns polling and websocket protocol messages.

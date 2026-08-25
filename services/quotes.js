@@ -4,9 +4,9 @@ import Soup from 'gi://Soup?version=3.0';
 import {buildEntries} from './entry-model.js';
 import {QuoteUpdateScheduler} from './quote-update-scheduler.js';
 import {QuoteStore} from './quote-store.js';
-import {HyperliquidProvider} from './providers/hyperliquid-live.js';
-import {KrakenProvider} from './providers/kraken-live.js';
-import {restProvider} from './providers/rest-quotes.js';
+import {HyperliquidProvider} from '../providers/hyperliquid/provider.js';
+import {KrakenProvider} from '../providers/kraken/provider.js';
+import {marketQuotesProvider} from '../providers/market-quotes.js';
 import {createLoadingEntries} from '../utils/format.js';
 import {
     loadRefreshIntervalSeconds,
@@ -44,7 +44,7 @@ export const QuotesService = GObject.registerClass({
             new KrakenProvider(liveProviderOptions),
             new HyperliquidProvider(liveProviderOptions),
         ];
-        this._pollProviders = [restProvider, ...this._liveProviders];
+        this._pollProviders = [marketQuotesProvider, ...this._liveProviders];
         this._scheduler = new QuoteUpdateScheduler({
             onRefresh: forced => this._refreshQuotes(forced),
             onReconnectLiveProviders: () => this._liveProviders.forEach(provider => provider.reconnectNow()),

@@ -6,11 +6,11 @@ import {
 import {
     normalizeHyperliquidLiveSymbol,
     normalizeHyperliquidTickerSymbol,
-} from './crypto-providers/hyperliquid/symbols.js';
+} from '../providers/hyperliquid/symbols.js';
 import {
     normalizeKrakenLiveSymbol,
     normalizeKrakenTickerSymbol,
-} from './crypto-providers/kraken/symbols.js';
+} from '../providers/kraken/symbols.js';
 import {LEFT_PANEL_SIDE, RIGHT_PANEL_SIDE} from './panel-sides.js';
 
 const ASSET_CATEGORY_VALUES = Object.values(ASSET_CATEGORIES);

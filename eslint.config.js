@@ -54,13 +54,13 @@ export default defineConfig([
         },
     },
     {
-        files: ['utils/**/*.js'],
+        files: ['providers/**/*.js', 'utils/**/*.js'],
         ignores: ['utils/prefs/**/*.js'],
         rules: {
             'no-restricted-imports': ['error', {
                 patterns: [{
                     group: ['gi://Adw', 'gi://Clutter', 'gi://Gdk', 'gi://Gtk', 'gi://St', 'resource:///org/gnome/shell/ui/**'],
-                    message: 'Shared utility modules must not import process-specific UI libraries',
+                    message: 'Process-neutral modules must not import process-specific UI libraries',
                 }],
             }],
         },

@@ -11,9 +11,9 @@ if [[ -L "${TARGET_DIR}" ]]; then
 fi
 
 mkdir -p "${TARGET_DIR}"
-rm -rf "${TARGET_DIR}/ui" "${TARGET_DIR}/services" "${TARGET_DIR}/utils" "${TARGET_DIR}/schemas"
+rm -rf "${TARGET_DIR}/providers" "${TARGET_DIR}/ui" "${TARGET_DIR}/services" "${TARGET_DIR}/utils" "${TARGET_DIR}/schemas"
 cp "${SOURCE_DIR}/metadata.json" "${SOURCE_DIR}/extension.js" "${SOURCE_DIR}/prefs.js" "${TARGET_DIR}/"
-cp -r "${SOURCE_DIR}/ui" "${SOURCE_DIR}/services" "${SOURCE_DIR}/utils" "${SOURCE_DIR}/schemas" "${TARGET_DIR}/"
+cp -r "${SOURCE_DIR}/providers" "${SOURCE_DIR}/ui" "${SOURCE_DIR}/services" "${SOURCE_DIR}/utils" "${SOURCE_DIR}/schemas" "${TARGET_DIR}/"
 glib-compile-schemas "${TARGET_DIR}/schemas"
 
 printf 'Installed extension to %s\n' "${TARGET_DIR}"
