@@ -13,16 +13,13 @@ export async function runTests() {
 }
 
 async function testKrakenLivePipeline() {
-    const socket = new FakeWebsocket();
-    const updates = [];
-    const provider = new KrakenProvider({
-        uuid: 'test',
-        connectWebsocket: async () => socket,
-        onQuotes: quotes => updates.push(projectQuotes(quotes)),
+    const tickers = [cryptoTicker('btcusd', 'BTC/USD')];
+    const stale = [];
+    const {provider, socket, updates} = await startProvider(KrakenProvider, tickers, {
+        onStale: staleTickers => stale.push(staleTickers.map(ticker => ticker.symbol)),
     });
-    provider.start({});
-    provider.updateSubscriptions([cryptoTicker('btcusd', 'BTC/USD')]);
-    await flushPromises();
+    assertDeepEqual(provider.selectPollTickers(tickers).map(ticker => ticker.symbol), ['btcusd'],
+        'Socket adoption alone should not disable REST fallback');
 
     socket.emitText({
         method: 'subscribe',
@@ -51,31 +48,33 @@ async function testKrakenLivePipeline() {
     assertDeepEqual(updates, [[
         ['BTCUSD', {price: 104321.5, previousClose: 104000}],
     ]], 'Kraken traffic should reach consumers as normalized saved-symbol quotes');
-    assertEqual(provider.isConnected(), true,
-        'A successful Kraken handshake should keep REST fallback disabled');
+    assertDeepEqual([
+        provider.selectPollTickers(tickers),
+        provider._hasLiveTrafficTimedOut(provider._lastMessageUsec + 60_000_000),
+    ], [[], true], 'Acknowledged traffic should disable fallback and reset the silence window');
+
+    socket.emitClosed();
+    assertDeepEqual([
+        provider.isConnected(),
+        provider.selectPollTickers(tickers).map(ticker => ticker.symbol),
+        stale,
+        provider._reconnectTimeoutId !== 0,
+        socket.closeCalls,
+    ], [false, ['btcusd'], [['btcusd']], true, 1],
+    'A closed transport should restore fallback, mark stale, close, and arm reconnect');
     provider.stop();
-    assertEqual(socket.closeCalls, 1,
-        'Stopping Kraken should close its adopted socket once');
 }
 
 async function testHyperliquidLivePipeline() {
-    const socket = new FakeWebsocket();
-    const updates = [];
-    const provider = new HyperliquidProvider({
-        uuid: 'test',
-        connectWebsocket: async () => socket,
-        onQuotes: quotes => updates.push(projectQuotes(quotes)),
-    });
-    provider.start({});
-    provider.updateSubscriptions([
+    const tickers = [
         cryptoTicker('purrusdc', 'PURR/USDC', CRYPTO_PROVIDERS.HYPERLIQUID),
         cryptoTicker('btc', 'BTC', CRYPTO_PROVIDERS.HYPERLIQUID),
-    ]);
-    await flushPromises();
+    ];
+    const {provider, socket, updates} = await startProvider(HyperliquidProvider, tickers);
 
     socket.emitText({
         channel: 'subscriptionResponse',
-        data: {type: 'activeAssetCtx'},
+        data: {method: 'subscribe', subscription: {type: 'activeAssetCtx', coin: 'PURR/USDC'}},
     });
     socket.emitText({
         channel: 'activeAssetCtx',
@@ -89,6 +88,8 @@ async function testHyperliquidLivePipeline() {
     assertDeepEqual(updates, [[
         ['PURRUSDC', {price: 0.42, previousClose: 0.39}],
     ]], 'Hyperliquid traffic should reach consumers as normalized saved-symbol quotes');
+    assertDeepEqual(provider.selectPollTickers(tickers).map(ticker => ticker.symbol), ['btc'],
+        'Fallback should remain active for each unacknowledged Hyperliquid symbol');
     provider.stop();
 }
 
@@ -103,59 +104,38 @@ async function testHandshakeOwnership() {
     provider.start({});
     provider.updateSubscriptions([cryptoTicker('btcusd', 'BTC/USD')]);
     provider.updateSubscriptions([cryptoTicker('btcusd', 'BTC/USD')]);
-    assertEqual(attempts.length, 1,
-        'Repeated subscription updates should share the active handshake');
-
     provider.updateSubscriptions([cryptoTicker('ethusd', 'ETH/USD')]);
-    assertEqual(attempts.length, 2,
-        'A changed symbol set should replace the pending handshake');
-    assertEqual(attempts[0].cancellable.is_cancelled(), true,
-        'Replacing a handshake should cancel its Soup operation');
+    assertDeepEqual([attempts.length, attempts[0].cancellable.is_cancelled()], [2, true],
+        'Repeated subscriptions should share a handshake while changed symbols replace it');
 
     const staleSocket = new FakeWebsocket();
-    attempts[0].resolve(staleSocket);
-    await flushPromises();
-    assertEqual(staleSocket.closeCalls, 1,
-        'A connector that completes after invalidation should have its socket closed');
-
     const activeSocket = new FakeWebsocket();
+    attempts[0].resolve(staleSocket);
     attempts[1].resolve(activeSocket);
     await flushPromises();
-    assertEqual(provider.isConnected(), true,
-        'Only the handshake for the current session and symbols should be adopted');
+    assertDeepEqual([staleSocket.closeCalls, provider.isConnected()], [1, true],
+        'Only the current handshake should be adopted; a stale completion should close');
 
     provider.updateSubscriptions([cryptoTicker('solusd', 'SOL/USD')]);
-    assertEqual(activeSocket.closeCalls, 1,
-        'Resubscription should release the previous active socket');
     provider.stop();
     const stoppedSocket = new FakeWebsocket();
     attempts[2].resolve(stoppedSocket);
     await flushPromises();
-    assertEqual(stoppedSocket.closeCalls, 1,
-        'A handshake completing after stop should never resurrect the provider');
-    assertEqual(provider.isConnected(), false,
-        'Stopping should leave no active websocket after late completions');
+    assertDeepEqual([activeSocket.closeCalls, stoppedSocket.closeCalls, provider.isConnected()], [1, 1, false],
+        'Resubscription and stop should close active and late sockets without resurrection');
 }
 
 async function testKrakenSymbolRejectionIsolation() {
-    const socket = new FakeWebsocket();
     const stale = [];
-    const updates = [];
     const diagnostics = [];
     const fallbacks = [];
     const tickers = [
         cryptoTicker('btcusd', 'BTC/USD'),
         cryptoTicker('invalidusd', 'NOTAREALPAIR/USD'),
     ];
-    const provider = new KrakenProvider({
-        uuid: 'test',
-        connectWebsocket: async () => socket,
+    const {provider, socket, updates} = await startProvider(KrakenProvider, tickers, {
         onStale: staleTickers => stale.push(staleTickers.map(ticker => ticker.symbol)),
-        onQuotes: quotes => updates.push(projectQuotes(quotes)),
     });
-    provider.start({});
-    provider.updateSubscriptions(tickers);
-    await flushPromises();
 
     const originalLog = globalThis.log;
     globalThis.log = message => diagnostics.push(message);
@@ -215,13 +195,24 @@ async function testKrakenSymbolRejectionIsolation() {
     provider.stop();
 }
 
+async function startProvider(Provider, tickers, options = {}) {
+    const socket = new FakeWebsocket();
+    const updates = [];
+    const provider = new Provider({
+        uuid: 'test',
+        connectWebsocket: async () => socket,
+        onQuotes: quotes => updates.push(projectQuotes(quotes)),
+        onStale() {},
+        ...options,
+    });
+    provider.start({});
+    provider.updateSubscriptions(tickers);
+    await flushPromises();
+    return {provider, socket, updates};
+}
+
 function cryptoTicker(symbol, liveSymbol, cryptoProvider = CRYPTO_PROVIDERS.KRAKEN) {
-    return {
-        symbol,
-        liveSymbol,
-        assetCategory: ASSET_CATEGORIES.CRYPTO,
-        cryptoProvider,
-    };
+    return {symbol, liveSymbol, assetCategory: ASSET_CATEGORIES.CRYPTO, cryptoProvider};
 }
 
 function projectQuotes(quotes) {
@@ -260,14 +251,21 @@ class FakeWebsocket {
 
     emitText(payload) {
         const bytes = {get_data: () => new TextEncoder().encode(JSON.stringify(payload))};
+        this._emit('message', Soup.WebsocketDataType.TEXT, bytes);
+    }
+
+    emitClosed() {
+        this._emit('closed');
+    }
+
+    _emit(expectedSignal, ...args) {
         for (const {signal, handler} of this.handlers.values()) {
-            if (signal === 'message')
-                handler(this, Soup.WebsocketDataType.TEXT, bytes);
+            if (signal === expectedSignal)
+                handler(this, ...args);
         }
     }
 }
 
 async function flushPromises() {
-    await Promise.resolve();
     await Promise.resolve();
 }

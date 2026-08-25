@@ -36,14 +36,6 @@ export class KrakenProvider extends LiveWebsocketProvider {
             this._reportedRejectedSymbols.delete('*');
     }
 
-    /* A healthy shared socket sends only rejected pairs through normal-cadence REST fallback. */
-    selectPollTickers(tickers) {
-        if (!this.isConnected() || this._reportedRejectedSymbols.has('*'))
-            return tickers;
-
-        return tickers.filter(ticker => this._reportedRejectedSymbols.has(ticker.liveSymbol));
-    }
-
     /* Kraken's REST endpoint accepts the same live symbols used by its websocket. */
     async poll(tickers, {session}) {
         if (!session || tickers.length === 0) return new Map();
@@ -93,12 +85,16 @@ export class KrakenProvider extends LiveWebsocketProvider {
             payload?.result?.channel === 'ticker'
         ) {
             this._clearAcknowledgedRejections(payload.result.symbol);
-            return {resetReconnect: true};
+            const readySymbols = Array.isArray(payload.result.symbol)
+                ? payload.result.symbol
+                : [payload.result.symbol];
+            return {readySymbols};
         }
 
         if (payload?.channel !== 'ticker' || !Array.isArray(payload.data)) return null;
 
         const updatedQuotes = new Map();
+        const readySymbols = [];
         const liveSymbolMap = this._getSymbolToTickerSymbolMap();
 
         payload.data.forEach(entry => {
@@ -109,10 +105,11 @@ export class KrakenProvider extends LiveWebsocketProvider {
                 return;
 
             this._clearAcknowledgedRejections(entry.symbol);
+            readySymbols.push(entry.symbol);
             updatedQuotes.set(tickerSymbol, quote);
         });
 
-        return {resetReconnect: updatedQuotes.size > 0, quotesBySymbol: updatedQuotes};
+        return {readySymbols, quotesBySymbol: updatedQuotes};
     }
 
     /* One bad pair produces one actionable warning until that pair later acknowledges or returns data. */

@@ -7,7 +7,6 @@ import {isLiveCryptoTicker} from '../../utils/asset-categories.js';
 const LIVE_CRYPTO_RECONNECT_DELAYS_SECONDS = [2, 5, 10, 20, 30, 60];
 const LIVE_SILENCE_TIMEOUT_SECONDS = 60;
 const LIVE_WATCHDOG_INTERVAL_SECONDS = 15;
-const NOOP = () => {};
 
 /* Soup's callback-style websocket handshake becomes the cancellable promise used by the shared lifecycle. */
 function openWebsocketConnection(session, websocketUrl, cancellable) {
@@ -24,10 +23,8 @@ function openWebsocketConnection(session, websocketUrl, cancellable) {
 }
 
 /*
- * Live providers share this websocket lifecycle while retaining their own REST
- * polling, subscription payload, and quote parsing. A generation-owned pending
- * handshake guarantees that subscription changes cannot orphan or adopt a
- * stale socket, and every transport failure follows one recovery path.
+ * Live providers share socket ownership, reconnect pacing, and payload decoding.
+ * Subclasses retain their REST polling, subscription messages, and quote parsing.
  */
 export class LiveWebsocketProvider {
     constructor({
@@ -35,8 +32,8 @@ export class LiveWebsocketProvider {
         name,
         websocketUrl,
         uuid,
-        onQuotes = NOOP,
-        onStale = NOOP,
+        onQuotes,
+        onStale,
         connectWebsocket = openWebsocketConnection,
     }) {
         this.id = id;
@@ -51,23 +48,16 @@ export class LiveWebsocketProvider {
         this._websocket = null;
         this._websocketSignalIds = [];
         this._pendingConnection = null;
-        this._connectionGeneration = 0;
         this._reconnectTimeoutId = 0;
         this._reconnectAttempt = 0;
-        this._subscribedSymbols = [];
         this._watchdogTimeoutId = 0;
-        this._lastMessageUsec = 0;
+        this._readySymbols = new Set();
         this._transportFailureReported = false;
         this._payloadFailureReported = false;
     }
 
     start(session) {
-        if (this._session)
-            return;
-
         this._session = session;
-        this._transportFailureReported = false;
-        this._payloadFailureReported = false;
         void this._connectIfNeeded();
     }
 
@@ -75,7 +65,6 @@ export class LiveWebsocketProvider {
         this._session = null;
         this._cancelPendingConnection();
         this._tickers = [];
-        this._subscribedSymbols = [];
         this._reconnectAttempt = 0;
         this._transportFailureReported = false;
         this._payloadFailureReported = false;
@@ -84,22 +73,13 @@ export class LiveWebsocketProvider {
     }
 
     updateSubscriptions(tickers) {
+        const previousSignature = createSymbolSignature(this._getDesiredSymbols());
         this._tickers = tickers.filter(ticker => this.ownsTicker(ticker));
 
         const desiredSymbols = this._getDesiredSymbols();
-        const desiredSignature = createSymbolSignature(desiredSymbols);
-        if (desiredSymbols.length === 0) {
-            this._reconnectTimeoutId = removeTimeout(this._reconnectTimeoutId);
-            this._reconnectAttempt = 0;
-            this._cancelPendingConnection();
-            this._disconnectWebsocket();
-            return;
-        }
-
-        if (this._websocket && createSymbolSignature(this._subscribedSymbols) === desiredSignature)
-            return;
-
-        if (this._pendingConnection?.symbolSignature === desiredSignature)
+        const subscriptionsUnchanged =
+            createSymbolSignature(desiredSymbols) === previousSignature;
+        if (desiredSymbols.length > 0 && subscriptionsUnchanged && (this._websocket || this._pendingConnection))
             return;
 
         this._reconnectTimeoutId = removeTimeout(this._reconnectTimeoutId);
@@ -107,7 +87,7 @@ export class LiveWebsocketProvider {
         this._cancelPendingConnection();
         this._disconnectWebsocket();
 
-        if (this._session)
+        if (desiredSymbols.length > 0)
             void this._connectIfNeeded();
     }
 
@@ -115,26 +95,16 @@ export class LiveWebsocketProvider {
         return this._websocket !== null;
     }
 
-    /* Provider identity and live-symbol validity together define both subscription and polling ownership. */
     ownsTicker(ticker) {
         return isLiveCryptoTicker(ticker, this.id);
     }
 
-    /* REST polling is the normal-cadence fallback while the provider's websocket is unavailable. */
-    shouldPoll() {
-        return !this.isConnected();
-    }
-
-    /* Connected providers skip REST by default; subclasses can narrow fallback to rejected subscriptions. */
+    /* REST fallback remains active until the provider acknowledges live traffic. */
     selectPollTickers(tickers) {
-        return this.shouldPoll() ? tickers : [];
+        return tickers.filter(ticker => !this._readySymbols.has(ticker.liveSymbol));
     }
 
-    /* Restored network availability restarts the existing reconnect ladder at its first delay. */
     reconnectNow() {
-        if (!this._session)
-            return;
-
         this._reconnectTimeoutId = removeTimeout(this._reconnectTimeoutId);
         this._reconnectAttempt = 0;
         this._recoverTransport();
@@ -148,104 +118,61 @@ export class LiveWebsocketProvider {
         return new Map(this._tickers.map(ticker => [ticker.liveSymbol, ticker.symbol.toUpperCase()]));
     }
 
-    /*
-     * Startup, reconnect, and resubscription all enter through this single-flight
-     * handshake. Only the attempt that still owns the session and exact desired
-     * symbol set may install its completed socket.
-     */
+    /* Only the cancellable that still owns the pending handshake may install its socket. */
     async _connectIfNeeded() {
         const liveSymbols = this._getDesiredSymbols();
-        const cannotConnect =
-            !this._session ||
-            this._websocket ||
-            this._pendingConnection ||
-            liveSymbols.length === 0;
-        if (cannotConnect)
+        if (!this._session || this._websocket || this._pendingConnection || liveSymbols.length === 0)
             return;
 
-        const attempt = {
-            cancellable: new Gio.Cancellable(),
-            generation: ++this._connectionGeneration,
-            session: this._session,
-            symbolSignature: createSymbolSignature(liveSymbols),
-            symbols: liveSymbols,
-        };
-        this._pendingConnection = attempt;
+        const session = this._session;
+        const pendingConnection = new Gio.Cancellable();
+        this._pendingConnection = pendingConnection;
 
         let websocket;
         try {
-            websocket = await this._connectWebsocket(
-                attempt.session,
-                this._websocketUrl,
-                attempt.cancellable
-            );
+            websocket = await this._connectWebsocket(session, this._websocketUrl, pendingConnection);
         } catch (error) {
-            if (!this._isCurrentConnectionAttempt(attempt))
+            if (this._pendingConnection !== pendingConnection)
                 return;
 
             this._pendingConnection = null;
-            this._recoverTransport({
-                error,
-                message: `failed to connect ${this._name} websocket`,
-            });
+            this._recoverTransport({error, message: `failed to connect ${this._name} websocket`});
             return;
         }
 
-        if (!this._isCurrentConnectionAttempt(attempt) || this._websocket) {
+        if (this._pendingConnection !== pendingConnection) {
             closeWebsocket(websocket);
             return;
         }
 
         this._pendingConnection = null;
-        this._adoptWebsocket(websocket, attempt.symbols);
-    }
-
-    _isCurrentConnectionAttempt(attempt) {
-        return (
-            this._pendingConnection === attempt &&
-            this._connectionGeneration === attempt.generation &&
-            this._session === attempt.session &&
-            createSymbolSignature(this._getDesiredSymbols()) === attempt.symbolSignature
-        );
+        this._adoptWebsocket(websocket, liveSymbols);
     }
 
     /* Invalidating first makes a connector that ignores cancellation harmless when it eventually completes. */
     _cancelPendingConnection() {
-        this._connectionGeneration += 1;
         const pendingConnection = this._pendingConnection;
         this._pendingConnection = null;
-        pendingConnection?.cancellable.cancel();
+        pendingConnection?.cancel();
     }
 
     /* Socket callbacks capture their connection so delayed signals from an old transport cannot mutate new state. */
     _adoptWebsocket(websocket, liveSymbols) {
         this._websocket = websocket;
-        this._websocketSignalIds = [];
-        this._websocketSignalIds.push(
+        this._websocketSignalIds = [
             websocket.connect('message', (_connection, type, messageBytes) => {
                 if (this._websocket === websocket)
                     this._handleSocketMessage(type, messageBytes);
-            })
-        );
-        this._websocketSignalIds.push(
+            }),
             websocket.connect('error', (_connection, error) => {
-                if (this._websocket === websocket) {
-                    this._recoverTransport({
-                        error,
-                        message: `${this._name} websocket error`,
-                    });
-                }
-            })
-        );
-        this._websocketSignalIds.push(
-            websocket.connect('closed', () => {
-                this._handleDisconnect(websocket);
-            })
-        );
+                if (this._websocket === websocket)
+                    this._recoverTransport({error, message: `${this._name} websocket error`});
+            }),
+            websocket.connect('closed', () => this._handleDisconnect(websocket)),
+        ];
 
-        this._subscribedSymbols = liveSymbols;
-        this._subscribe(websocket, liveSymbols);
         this._lastMessageUsec = GLib.get_monotonic_time();
+        this._subscribe(websocket, liveSymbols);
         this._startWatchdog();
     }
 
@@ -257,7 +184,7 @@ export class LiveWebsocketProvider {
         const signalIds = this._websocketSignalIds;
         this._websocket = null;
         this._websocketSignalIds = [];
-        this._subscribedSymbols = [];
+        this._readySymbols.clear();
 
         if (!websocket)
             return;
@@ -266,7 +193,6 @@ export class LiveWebsocketProvider {
         closeWebsocket(websocket);
     }
 
-    /* Closed callbacks participate only while their captured socket is still the active transport. */
     _handleDisconnect(websocket = this._websocket) {
         if (websocket && websocket !== this._websocket)
             return;
@@ -291,13 +217,11 @@ export class LiveWebsocketProvider {
         this._scheduleReconnect();
     }
 
-    /* Transport failures tell QuotesService that cached live quotes should render as stale. */
     _notifyStaleTickers(tickers = this._tickers) {
         if (tickers.length > 0)
             this._onStale(tickers);
     }
 
-    /* A reconnect ladder may report one transport failure until real inbound traffic proves recovery. */
     _reportTransportFailure(error, message) {
         if (this._transportFailureReported)
             return;
@@ -309,7 +233,7 @@ export class LiveWebsocketProvider {
             log(`${this._uuid}: ${message}`);
     }
 
-    /* All live providers share the same conservative reconnect policy so runtime behavior stays predictable. */
+    /* Persistent transports retry conservatively until live traffic proves recovery. */
     _scheduleReconnect() {
         if (!this._session || this._reconnectTimeoutId !== 0 || this._getDesiredSymbols().length === 0)
             return;
@@ -339,41 +263,26 @@ export class LiveWebsocketProvider {
             GLib.PRIORITY_DEFAULT,
             LIVE_WATCHDOG_INTERVAL_SECONDS,
             () => {
-                if (!this._session || !this._websocket) {
-                    this._watchdogTimeoutId = 0;
-                    return GLib.SOURCE_REMOVE;
-                }
-
                 if (!this._hasLiveTrafficTimedOut())
                     return GLib.SOURCE_CONTINUE;
 
                 this._watchdogTimeoutId = 0;
-                this._handleSilentConnection();
+                this._recoverTransport({
+                    message: `${this._name} websocket silent for ${LIVE_SILENCE_TIMEOUT_SECONDS}s; reconnecting`,
+                });
                 return GLib.SOURCE_REMOVE;
             }
         );
-    }
-
-    /* Any inbound frame proves transport recovery, including provider heartbeats. */
-    _markLiveTraffic() {
-        this._lastMessageUsec = GLib.get_monotonic_time();
-        this._transportFailureReported = false;
     }
 
     _hasLiveTrafficTimedOut(nowUsec = GLib.get_monotonic_time()) {
         return (nowUsec - this._lastMessageUsec) / 1_000_000 >= LIVE_SILENCE_TIMEOUT_SECONDS;
     }
 
-    /* Silent sockets use the same stale notification and single-reconnect path as every other transport failure. */
-    _handleSilentConnection() {
-        this._recoverTransport({
-            message: `${this._name} websocket silent for ${LIVE_SILENCE_TIMEOUT_SECONDS}s; reconnecting`,
-        });
-    }
-
     /* The base class handles decode and lifecycle actions; subclasses only decide what a payload means. */
     _handleSocketMessage(type, messageBytes) {
-        this._markLiveTraffic();
+        this._lastMessageUsec = GLib.get_monotonic_time();
+        this._transportFailureReported = false;
 
         if (type !== Soup.WebsocketDataType.TEXT)
             return;
@@ -393,29 +302,18 @@ export class LiveWebsocketProvider {
 
         const result = this._handlePayload(payload);
 
-        if (result?.staleTickers?.length > 0)
+        if (result?.staleTickers?.length > 0) {
+            result.staleTickers.forEach(ticker => this._readySymbols.delete(ticker.liveSymbol));
             this._notifyStaleTickers(result.staleTickers);
-
-        if (result?.reconnect) {
-            this._recoverTransport();
-            return;
         }
 
-        if (result?.resetReconnect)
+        if (result?.readySymbols?.length > 0) {
+            result.readySymbols.forEach(symbol => this._readySymbols.add(symbol));
             this._reconnectAttempt = 0;
+        }
 
         if (result?.quotesBySymbol?.size > 0)
             this._onQuotes(result.quotesBySymbol);
-    }
-
-    /* Hook: send the provider-specific subscription messages. */
-    _subscribe(_websocket, _symbols) {
-        throw new Error('Subclasses must implement _subscribe()');
-    }
-
-    /* Hook: convert one decoded provider payload into stale, reconnect, and quote actions. */
-    _handlePayload(_payload) {
-        throw new Error('Subclasses must implement _handlePayload()');
     }
 }
 
@@ -423,7 +321,6 @@ function createSymbolSignature(symbols) {
     return [...symbols].sort().join('|');
 }
 
-/* Late handshakes and active teardown share the same guarded socket close. */
 function closeWebsocket(websocket) {
     const state = websocket.get_state();
     if (state !== Soup.WebsocketState.CLOSING && state !== Soup.WebsocketState.CLOSED)

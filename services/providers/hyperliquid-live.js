@@ -3,8 +3,7 @@ import {hyperliquidAdapter} from '../../utils/crypto-providers/index.js';
 import {LiveWebsocketProvider} from './live-websocket-provider.js';
 
 /*
- * HyperliquidProvider owns snapshot polling and websocket protocol messages.
- * LiveWebsocketProvider supplies routing, lifecycle, reconnect, and stale notification.
+ * HyperliquidProvider supplies REST snapshots and protocol hooks to the shared websocket lifecycle.
  */
 export class HyperliquidProvider extends LiveWebsocketProvider {
     constructor(options) {
@@ -16,7 +15,6 @@ export class HyperliquidProvider extends LiveWebsocketProvider {
         });
     }
 
-    /* One snapshot response covers every requested Hyperliquid perp and spot market. */
     async poll(tickers, {session}) {
         if (!session || tickers.length === 0) return new Map();
 
@@ -34,22 +32,22 @@ export class HyperliquidProvider extends LiveWebsocketProvider {
         return quotesBySymbol;
     }
 
-    /* Hyperliquid requires one subscribe message per live market symbol. */
     _subscribe(websocket, symbols) {
-        symbols.forEach(symbol => {
-            websocket.send_text(JSON.stringify({
-                method: 'subscribe',
-                subscription: {
-                    type: 'activeAssetCtx',
-                    coin: symbol,
-                },
-            }));
-        });
+        symbols.forEach(coin => websocket.send_text(JSON.stringify({
+            method: 'subscribe',
+            subscription: {type: 'activeAssetCtx', coin},
+        })));
     }
 
-    /* Hyperliquid live payloads are normalized through createHyperliquidQuote before leaving the provider layer. */
     _handlePayload(payload) {
-        if (payload?.channel === 'subscriptionResponse' && payload?.data?.type === 'activeAssetCtx') return {resetReconnect: true};
+        if (
+            payload?.channel === 'subscriptionResponse' &&
+            payload?.data?.method === 'subscribe' &&
+            payload?.data?.subscription?.type === 'activeAssetCtx'
+        ) {
+            const liveSymbol = hyperliquidAdapter.normalizeLiveSymbol(payload.data.subscription.coin);
+            return this._getSymbolToTickerSymbolMap().has(liveSymbol) ? {readySymbols: [liveSymbol]} : null;
+        }
 
         if (payload?.channel !== 'activeAssetCtx' || !payload?.data?.coin || !payload?.data?.ctx) return null;
 
@@ -61,6 +59,6 @@ export class HyperliquidProvider extends LiveWebsocketProvider {
 
         if (!quote) return null;
 
-        return {resetReconnect: true, quotesBySymbol: new Map([[tickerSymbol, quote]])};
+        return {readySymbols: [liveSymbol], quotesBySymbol: new Map([[tickerSymbol, quote]])};
     }
 }
