@@ -8,7 +8,6 @@ const LIVE_CRYPTO_RECONNECT_DELAYS_SECONDS = [2, 5, 10, 20, 30, 60];
 const LIVE_SILENCE_TIMEOUT_SECONDS = 60;
 const LIVE_WATCHDOG_INTERVAL_SECONDS = 15;
 
-/* Soup's callback-style websocket handshake becomes the cancellable promise used by the shared lifecycle. */
 function openWebsocketConnection(session, websocketUrl, cancellable) {
     const message = Soup.Message.new('GET', websocketUrl);
     return new Promise((resolve, reject) => {
@@ -22,10 +21,6 @@ function openWebsocketConnection(session, websocketUrl, cancellable) {
     });
 }
 
-/*
- * Live providers share socket ownership, reconnect pacing, and payload decoding.
- * Subclasses retain their REST polling, subscription messages, and quote parsing.
- */
 export class LiveWebsocketProvider {
     constructor({
         id,
@@ -85,10 +80,6 @@ export class LiveWebsocketProvider {
 
         if (desiredSymbols.length > 0)
             void this._connectIfNeeded();
-    }
-
-    isConnected() {
-        return this._websocket !== null;
     }
 
     ownsTicker(ticker) {

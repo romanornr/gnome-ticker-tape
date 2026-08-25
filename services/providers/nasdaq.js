@@ -2,7 +2,7 @@ import {ASSET_CATEGORIES} from '../../utils/asset-categories.js';
 import {DEFAULT_HTTP_TIMEOUT_SECONDS, httpGetJson} from '../../utils/http.js';
 
 const NASDAQ_USER_AGENT = 'ticker-tape-gnome-extension/1.0';
-const NASDAQ_MAX_SYMBOLS_PER_PASS = 25;
+const NASDAQ_QUOTE_ENDPOINT = 'https://api.nasdaq.com/api/quote';
 
 const NASDAQ_ASSET_CLASSES = new Map([
     [ASSET_CATEGORIES.EQUITY, 'stocks'],
@@ -10,21 +10,14 @@ const NASDAQ_ASSET_CLASSES = new Map([
     [ASSET_CATEGORIES.COMMODITY, 'etf'],
 ]);
 
-/*
- * Nasdaq is the emergency fallback for US listings when the primary CNBC batch
- * misses them. It only understands US symbols; foreign catalog symbols would
- * resolve to NYSE ADRs with different prices, so ownership is restricted here.
- */
-function ownsFallbackTicker(ticker) {
-    return ticker.symbol.endsWith('.us') && NASDAQ_ASSET_CLASSES.has(ticker.assetCategory);
-}
-
-function mapSymbolToNasdaq(symbol) {
-    const normalized = `${symbol ?? ''}`.trim().toLowerCase();
-    if (!normalized.endsWith('.us'))
+function getRequest(ticker) {
+    if (ticker.symbol === '^ndq')
+        return {storeKey: '^NDQ', nasdaqSymbol: 'NDX', assetClass: 'index'};
+    if (!ticker.symbol.endsWith('.us') || !NASDAQ_ASSET_CLASSES.has(ticker.assetCategory))
         return null;
-
-    return normalized.slice(0, -3).toUpperCase().replace(/-/g, '.');
+    return {storeKey: ticker.symbol.toUpperCase(),
+        nasdaqSymbol: ticker.symbol.slice(0, -3).toUpperCase().replaceAll('-', '.'),
+        assetClass: NASDAQ_ASSET_CLASSES.get(ticker.assetCategory)};
 }
 
 export async function refresh(tickers, {session}) {
@@ -32,34 +25,26 @@ export async function refresh(tickers, {session}) {
     if (!session)
         return quotesBySymbol;
 
-    const fallbackTickers = tickers.filter(ownsFallbackTicker);
-    /* One request per symbol runs concurrently: serialized, a capped pass could stall a refresh for minutes on timeouts. */
-    const results = await Promise.allSettled(fallbackTickers
-        .slice(0, NASDAQ_MAX_SYMBOLS_PER_PASS)
-        .map(ticker => fetchQuote(session, ticker)));
+    const requests = new Map(tickers.map(getRequest).filter(Boolean).map(request => [request.storeKey, request]));
+    const results = await Promise.allSettled([...requests.values()].map(request => fetchQuote(session, request)));
 
-    results.forEach(result => {
-        if (result.status === 'fulfilled' && result.value)
-            quotesBySymbol.set(result.value.storeKey, result.value.quote);
-    });
+    results.filter(result => result.status === 'fulfilled' && result.value).forEach(({value}) =>
+        quotesBySymbol.set(value.storeKey, value.quote));
+
+    const error = results.find(result => result.status === 'rejected')?.reason;
+    if (quotesBySymbol.size === 0 && error) throw error;
 
     return quotesBySymbol;
 }
 
-async function fetchQuote(session, ticker) {
-    const nasdaqSymbol = mapSymbolToNasdaq(ticker.symbol);
-    const assetClass = NASDAQ_ASSET_CLASSES.get(ticker.assetCategory);
-
-    const payload = await httpGetJson(session, buildQuoteUrl(nasdaqSymbol, assetClass), {
+async function fetchQuote(session, {storeKey, nasdaqSymbol, assetClass}) {
+    const url = `${NASDAQ_QUOTE_ENDPOINT}/${encodeURIComponent(nasdaqSymbol)}/info?assetclass=${assetClass}`;
+    const payload = await httpGetJson(session, url, {
         timeoutMessage: `Timed out after ${DEFAULT_HTTP_TIMEOUT_SECONDS}s while loading Nasdaq quotes.`,
         headers: {'User-Agent': NASDAQ_USER_AGENT},
     });
     const quote = parseQuoteResponse(payload);
-    return quote ? {storeKey: ticker.symbol.toUpperCase(), quote} : null;
-}
-
-function buildQuoteUrl(nasdaqSymbol, assetClass) {
-    return `https://api.nasdaq.com/api/quote/${encodeURIComponent(nasdaqSymbol)}/info?assetclass=${assetClass}`;
+    return quote ? {storeKey, quote} : null;
 }
 
 export function parseQuoteResponse(payload) {
@@ -67,10 +52,10 @@ export function parseQuoteResponse(payload) {
         throw new Error('Nasdaq returned an invalid quote response.');
     if (payload.data === null)
         return null;
-    if (typeof payload.data !== 'object' || !Object.hasOwn(payload.data, 'primaryData'))
+    const primaryData = payload.data?.primaryData;
+    if (!primaryData || typeof primaryData !== 'object')
         throw new Error('Nasdaq returned an invalid quote response.');
 
-    const primaryData = payload.data.primaryData;
     const price = parseNasdaqNumber(primaryData?.lastSalePrice);
     const quoteDate = normalizeTradeTimestamp(primaryData?.lastTradeTimestamp);
 
@@ -86,11 +71,13 @@ export function parseQuoteResponse(payload) {
 }
 
 function parseNasdaqNumber(text) {
-    const normalized = `${text ?? ''}`.replace(/[$,]/g, '').trim();
-    if (normalized === '')
+    if (typeof text !== 'string' && typeof text !== 'number')
         return null;
 
-    const value = Number.parseFloat(normalized);
+    const normalized = `${text}`.trim();
+    if (!/^\$?[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)$/.test(normalized))
+        return null;
+    const value = Number(normalized.replace(/[$,]/g, ''));
     return Number.isFinite(value) ? value : null;
 }
 
@@ -100,7 +87,8 @@ const MONTHS_BY_PREFIX = new Map([
 ]);
 
 function normalizeTradeTimestamp(timestampText) {
-    const match = /^([A-Za-z]{3})[A-Za-z]* (\d{1,2}), (\d{4})/.exec(`${timestampText ?? ''}`.trim());
+    if (typeof timestampText !== 'string') return '';
+    const match = /^([A-Za-z]{3})[A-Za-z]* (\d{1,2}), (\d{4})(?: \d{1,2}:\d{2} [AP]M ET)?$/.exec(timestampText.trim());
     if (!match)
         return '';
 
@@ -108,5 +96,9 @@ function normalizeTradeTimestamp(timestampText) {
     if (!month)
         return '';
 
-    return `${match[3]}${month}${match[2].padStart(2, '0')}`;
+    const day = match[2].padStart(2, '0');
+    const date = new Date(Date.UTC(Number(match[3]), Number(month) - 1, Number(day)));
+    return date.getUTCFullYear() === Number(match[3]) && date.getUTCMonth() === Number(month) - 1 && date.getUTCDate() === Number(day)
+        ? `${match[3]}${month}${day}`
+        : '';
 }

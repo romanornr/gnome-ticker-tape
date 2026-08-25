@@ -10,7 +10,6 @@ const CNBC_BATCH_SIZE = 30;
 const CNBC_USER_AGENT = 'ticker-tape-gnome-extension/1.0';
 const CNBC_QUOTE_ENDPOINT = 'https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol';
 const DXY_SAVED_SYMBOL = 'dx.f';
-/* Standard ICE U.S. Dollar Index formula against CNBC's matching six spot symbols. */
 const DXY_FORMULA = {
     constant: 50.14348112,
     legs: [
@@ -23,87 +22,81 @@ const DXY_FORMULA = {
     ],
 };
 
-/*
- * CNBC maps catalog tickers into batched wire symbols and normalized quotes.
- * FX pairs and DXY derive from per-currency USD spot legs in those same batches.
- */
 export async function refresh(tickers, {session}) {
     if (!session || tickers.length === 0)
         return new Map();
 
-    const plan = buildRequestPlan(tickers);
-    const quotesByCnbcSymbol = await fetchQuotes(session, plan.requestSymbols);
-    return assembleQuotes(plan, quotesByCnbcSymbol);
+    const {requests, symbols} = buildRequestPlan(tickers);
+    const sourceQuotes = await fetchQuotes(session, [...symbols]);
+    const quotes = new Map();
+    requests.forEach(({storeKey, cnbcSymbol, fxPair, dxy}) => {
+        const quote = cnbcSymbol
+            ? sourceQuotes.get(cnbcSymbol)
+            : dxy ? deriveDxyQuote(sourceQuotes) : deriveFxQuote(fxPair, sourceQuotes);
+        if (quote) quotes.set(storeKey, quote);
+    });
+    return quotes;
 }
 
 function buildQuoteUrl(cnbcSymbols) {
-    const joinedSymbols = cnbcSymbols
+    const symbols = cnbcSymbols
         .map(cnbcSymbol => encodeURIComponent(cnbcSymbol).replace(/%3D/g, '='))
         .join('|');
-
-    return `${CNBC_QUOTE_ENDPOINT}?symbols=${joinedSymbols}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json&events=1`;
+    return `${CNBC_QUOTE_ENDPOINT}?symbols=${symbols}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json&events=1`;
 }
 
-/*
- * Runtime batch parsing is intentionally tolerant: one unusable CNBC entry
- * should not prevent every other symbol in the batch from reaching QuoteStore.
- * Unknown symbols come back as bare {code, symbol} stubs and are skipped here.
- */
 export function parseRestQuoteResponse(payload) {
     const result = payload?.FormattedQuoteResult;
-    if (!result || typeof result !== 'object' || !Object.hasOwn(result, 'FormattedQuote'))
+    const entries = result?.FormattedQuote;
+    if (!result || typeof result !== 'object' ||
+        (!Array.isArray(entries) && (!entries || typeof entries !== 'object')))
         throw new Error('CNBC returned an invalid quote response.');
 
     const quotesByCnbcSymbol = new Map();
-    const entries = result.FormattedQuote;
-    const quoteList = Array.isArray(entries) ? entries : entries ? [entries] : [];
-
-    quoteList.forEach(entry => {
-        const cnbcSymbol = `${entry?.symbol ?? ''}`.trim().toUpperCase();
+    (Array.isArray(entries) ? entries : [entries]).forEach(entry => {
+        const cnbcSymbol = typeof entry?.symbol === 'string' ? entry.symbol.trim().toUpperCase() : '';
         const price = parseQuoteNumber(entry?.last);
-        const quoteDate = normalizeQuoteDate(entry?.last_time);
+        const quoteDate = parseQuoteDate(entry?.last_time);
 
-        if (cnbcSymbol === '' || !Number.isFinite(price) || price <= 0 || quoteDate === '')
+        if (cnbcSymbol === '' || price === null || price <= 0 || quoteDate === '')
             return;
 
-        /*
-         * CNBC rolls previous_day_closing to the just-finished U.S. close before the next session prints.
-         * It then equals last, so every U.S. ticker would read 0.00% until the open.
-         * change stays anchored to the real prior close; last - change matches previous_day_closing while a market trades.
-         */
+        /* CNBC change stays anchored to the prior close when previous_day_closing rolls forward. */
         const change = parseQuoteNumber(entry?.change);
-        const previousClose = Number.isFinite(change)
+        const previousClose = change !== null
             ? price - change
             : parseQuoteNumber(entry?.previous_day_closing);
-        quotesByCnbcSymbol.set(cnbcSymbol, {
-            price,
-            quoteDate,
-            previousClose: Number.isFinite(previousClose) && previousClose > 0 ? previousClose : null,
-        });
+        quotesByCnbcSymbol.set(cnbcSymbol, {price, quoteDate,
+            previousClose: previousClose !== null && previousClose > 0 ? previousClose : null});
     });
 
     return quotesByCnbcSymbol;
 }
 
 function parseQuoteNumber(text) {
-    const normalized = `${text ?? ''}`.replace(/,/g, '').trim();
-    if (normalized === '')
+    if (typeof text !== 'string' && typeof text !== 'number')
         return null;
 
-    const value = Number.parseFloat(normalized);
+    const normalized = `${text}`.trim();
+    if (!/^[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)$/.test(normalized))
+        return null;
+
+    const value = Number(normalized.replaceAll(',', ''));
     return Number.isFinite(value) ? value : null;
 }
 
-function normalizeQuoteDate(dateText) {
-    const normalized = `${dateText ?? ''}`.slice(0, 10).replaceAll('-', '');
-    return /^\d{8}$/.test(normalized) ? normalized : '';
+function parseQuoteDate(text) {
+    if (typeof text !== 'string') return '';
+    const match = /^(\d{4})-(\d{2})-(\d{2})(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z| ?[A-Z]{2,5}|[+-]\d{2}:?\d{2})?)?$/.exec(text.trim());
+    if (!match) return '';
+
+    const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    return date.getUTCFullYear() === Number(match[1]) && date.getUTCMonth() === Number(match[2]) - 1 && date.getUTCDate() === Number(match[3])
+        ? `${match[1]}${match[2]}${match[3]}`
+        : '';
 }
 
-function isDerivedDxySymbol(symbol) {
-    return `${symbol ?? ''}`.trim().toLowerCase() === DXY_SAVED_SYMBOL;
-}
-
-/* An FX pair quote is dated by its oldest component so freshness is never overstated. */
+/* Use the oldest FX component date so the synthetic quote is not newer than its inputs. */
 export function deriveFxQuote({baseCurrency, quoteCurrency}, quotesByCnbcSymbol) {
     const baseLeg = resolveFxLeg(baseCurrency, quotesByCnbcSymbol);
     const quoteLeg = resolveFxLeg(quoteCurrency, quotesByCnbcSymbol);
@@ -117,21 +110,17 @@ export function deriveFxQuote({baseCurrency, quoteCurrency}, quotesByCnbcSymbol)
     const previousCloseRatio = baseLeg.previousUsdPerUnit !== null && quoteLeg.previousUsdPerUnit !== null
         ? baseLeg.previousUsdPerUnit / quoteLeg.previousUsdPerUnit
         : null;
-    /* Validated like price, so a degenerate leg cannot leak a non-finite previous close downstream. */
     const previousClose = Number.isFinite(previousCloseRatio) && previousCloseRatio > 0
         ? previousCloseRatio
         : null;
-    const quoteDate = [baseLeg.quoteDate, quoteLeg.quoteDate]
-        .filter(date => date !== null)
-        .sort()
-        .at(0) ?? '';
+    const quoteDate = [baseLeg.quoteDate, quoteLeg.quoteDate].filter(Boolean).sort().at(0) ?? '';
     if (quoteDate === '')
         return null;
 
     return {price, quoteDate, previousClose};
 }
 
-/* DXY derives from the same parsed spot vector as FX pairs and is valid only with a complete basket. */
+/* DXY requires the complete six-currency spot basket. */
 export function deriveDxyQuote(quotesByCnbcSymbol) {
     const legs = DXY_FORMULA.legs.map(([symbol, exponent]) => [quotesByCnbcSymbol.get(symbol), exponent]);
     const deriveValue = field => {
@@ -153,7 +142,6 @@ export function deriveDxyQuote(quotesByCnbcSymbol) {
     return {price, quoteDate, previousClose: deriveValue('previousClose')};
 }
 
-/* USD is the vector anchor with no request of its own; every other leg must resolve from the fetched spot quotes. */
 function resolveFxLeg(currencyCode, quotesByCnbcSymbol) {
     if (currencyCode === 'USD')
         return {usdPerUnit: 1, previousUsdPerUnit: 1, quoteDate: null};
@@ -174,81 +162,32 @@ function resolveFxLeg(currencyCode, quotesByCnbcSymbol) {
 }
 
 function buildRequestPlan(tickers) {
-    const directRequests = [];
-    const fxRequests = [];
-    const dxyRequests = [];
-    const requestSymbols = new Set();
+    const requests = [];
+    const symbols = new Set();
 
     tickers.forEach(ticker => {
-        const symbol = ticker.symbol;
-        const storeKey = symbol.toUpperCase();
-        const fxPair = parseFxPairSymbol(symbol);
-
-        if (isDerivedDxySymbol(symbol)) {
-            dxyRequests.push({storeKey});
-            DXY_FORMULA.legs.forEach(([cnbcSymbol]) => requestSymbols.add(cnbcSymbol));
-            return;
+        const storeKey = ticker.symbol.toUpperCase();
+        const fxPair = parseFxPairSymbol(ticker.symbol);
+        if (ticker.symbol.trim().toLowerCase() === DXY_SAVED_SYMBOL) {
+            requests.push({storeKey, dxy: true});
+            DXY_FORMULA.legs.forEach(([symbol]) => symbols.add(symbol));
+        } else if (fxPair) {
+            requests.push({storeKey, fxPair});
+            [fxPair.baseCurrency, fxPair.quoteCurrency]
+                .map(buildFxSpotSymbol).filter(Boolean).forEach(symbol => symbols.add(symbol));
+        } else {
+            const cnbcSymbol = mapSymbolToCnbc(ticker.symbol);
+            if (!cnbcSymbol) return;
+            requests.push({storeKey, cnbcSymbol});
+            symbols.add(cnbcSymbol);
         }
-
-        if (fxPair) {
-            fxRequests.push({storeKey, fxPair});
-            fxLegSymbols(fxPair).forEach(legSymbol => requestSymbols.add(legSymbol));
-            return;
-        }
-
-        const cnbcSymbol = mapSymbolToCnbc(symbol);
-        if (!cnbcSymbol)
-            return;
-
-        directRequests.push({storeKey, cnbcSymbol});
-        requestSymbols.add(cnbcSymbol);
     });
-
-    return {directRequests, fxRequests, dxyRequests, requestSymbols: [...requestSymbols]};
+    return {requests, symbols};
 }
 
-function fxLegSymbols({baseCurrency, quoteCurrency}) {
-    return [baseCurrency, quoteCurrency]
-        .map(currencyCode => buildFxSpotSymbol(currencyCode))
-        .filter(legSymbol => legSymbol !== null);
-}
-
-function assembleQuotes({directRequests, fxRequests, dxyRequests}, quotesByCnbcSymbol) {
-    const quotesBySymbol = new Map();
-
-    directRequests.forEach(({storeKey, cnbcSymbol}) => {
-        const quote = quotesByCnbcSymbol.get(cnbcSymbol);
-        if (quote)
-            quotesBySymbol.set(storeKey, quote);
-    });
-
-    fxRequests.forEach(({storeKey, fxPair}) => {
-        const quote = deriveFxQuote(fxPair, quotesByCnbcSymbol);
-        if (quote)
-            quotesBySymbol.set(storeKey, quote);
-    });
-
-    dxyRequests.forEach(({storeKey}) => {
-        const quote = deriveDxyQuote(quotesByCnbcSymbol);
-        if (quote)
-            quotesBySymbol.set(storeKey, quote);
-    });
-
-    return quotesBySymbol;
-}
-
-/*
- * Larger watchlists split into fixed-size batches so no single URL grows
- * unbounded. One failing batch keeps the quotes the others already returned;
- * only a pass where every batch failed rethrows, so the caller can still fall
- * back or mark stale.
- */
 async function fetchQuotes(session, cnbcSymbols) {
     const quotesByCnbcSymbol = new Map();
-    let lastError = null;
-    let succeededCount = 0;
-    const batchCount = Math.ceil(cnbcSymbols.length / CNBC_BATCH_SIZE);
-    const batches = Array.from({length: batchCount}, (_unused, index) =>
+    const batches = Array.from({length: Math.ceil(cnbcSymbols.length / CNBC_BATCH_SIZE)}, (_unused, index) =>
         cnbcSymbols.slice(index * CNBC_BATCH_SIZE, (index + 1) * CNBC_BATCH_SIZE));
     const results = await Promise.allSettled(batches.map(batch =>
         httpGetJson(session, buildQuoteUrl(batch), {
@@ -256,17 +195,11 @@ async function fetchQuotes(session, cnbcSymbols) {
             headers: {'User-Agent': CNBC_USER_AGENT},
         }).then(parseRestQuoteResponse)));
 
-    results.forEach(result => {
-        if (result.status === 'fulfilled') {
-            result.value.forEach((quote, cnbcSymbol) => quotesByCnbcSymbol.set(cnbcSymbol, quote));
-            succeededCount += 1;
-        } else {
-            lastError = result.reason;
-        }
-    });
+    results.filter(result => result.status === 'fulfilled').forEach(result =>
+        result.value.forEach((quote, symbol) => quotesByCnbcSymbol.set(symbol, quote)));
 
-    if (succeededCount === 0 && lastError)
-        throw lastError;
+    const error = results.find(result => result.status === 'rejected')?.reason;
+    if (quotesByCnbcSymbol.size === 0 && error) throw error;
 
     return quotesByCnbcSymbol;
 }

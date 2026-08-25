@@ -84,7 +84,7 @@ contain perpetual futures such as `BTC`.
 | Crypto | Always open |
 
 CNBC is the primary batched REST source for non-crypto quotes. Nasdaq is a
-narrow fallback for missed U.S. listings, and open.er-api.com supplies an FX
+narrow fallback for missed U.S. listings plus NDX, and open.er-api.com supplies an FX
 rate-table fallback. Saved catalog symbols retain their historical form while
 `services/providers/cnbc-symbols.js` translates them for CNBC.
 

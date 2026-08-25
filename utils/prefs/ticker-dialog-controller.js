@@ -215,12 +215,10 @@ class TickerDialogController {
             return;
         }
 
-        const matches = this.assetCategory === ASSET_CATEGORIES.CRYPTO && this.cryptoCatalog.length === 0
-            ? []
-            : matchCuratedTickers(this.assetCategory, query, {
-                cryptoCatalog: this.cryptoCatalog,
-                cryptoProvider: this.cryptoProvider,
-            });
+        const matches = matchCuratedTickers(this.assetCategory, query, {
+            cryptoCatalog: this.cryptoCatalog,
+            cryptoProvider: this.cryptoProvider,
+        });
         matches.slice(0, MAX_SUGGESTIONS).forEach(ticker => {
             const row = new Adw.ActionRow({
                 title: ticker.label,

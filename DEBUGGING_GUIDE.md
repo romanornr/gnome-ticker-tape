@@ -60,7 +60,7 @@ layers to conceal invalid data from an earlier one.
 ## REST Providers
 
 `services/providers/rest-quotes.js` coordinates CNBC with narrow Nasdaq and FX
-fallbacks. When debugging a response, inspect:
+fallbacks. Nasdaq covers U.S. listings plus NDX. When debugging a response, inspect:
 
 - HTTP status and error body;
 - the documented top-level response envelope;

@@ -20,14 +20,12 @@ export function loadHyperliquidMarkets() {
     return cachedHyperliquidMarketsPromise;
 }
 
-/* Prefs discovery and REST fallback share the perpetual-market snapshot. */
 export async function fetchHyperliquidMarketSnapshots(session) {
     return buildHyperliquidPerpEntries(
         await httpPostJson(session, HYPERLIQUID_API_URL, {type: 'metaAndAssetCtxs'})
     );
 }
 
-/* The runtime catalog is cached because Hyperliquid metadata changes infrequently. */
 async function _fetchHyperliquidMarkets() {
     const session = new Soup.Session();
 
@@ -41,7 +39,8 @@ async function _fetchHyperliquidMarkets() {
 
 function buildHyperliquidPerpEntries(response) {
     if (!Array.isArray(response) || response.length !== 2 ||
-        !Array.isArray(response[0]?.universe) || !Array.isArray(response[1]))
+        !Array.isArray(response[0]?.universe) || !Array.isArray(response[1]) ||
+        response[0].universe.length !== response[1].length)
         throw new Error('Hyperliquid returned an invalid market snapshot.');
 
     const [meta, contexts] = response;
@@ -69,7 +68,6 @@ function createHyperliquidPerpCatalogEntry(market, ctx) {
     };
 }
 
-/* Price precision is derived from provider text because Hyperliquid does not ship one fixed decimal field. */
 function deriveHyperliquidPriceDecimals(ctx) {
     const priceText = `${ctx?.midPx ?? ctx?.markPx ?? ctx?.prevDayPx ?? ''}`.trim();
     if (priceText === '') return 2;

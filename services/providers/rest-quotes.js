@@ -4,7 +4,6 @@ import {refresh as refreshCnbcQuotes} from './cnbc.js';
 import {refresh as refreshNasdaqQuotes} from './nasdaq.js';
 import {refresh as refreshFallbackFxQuotes} from './open-er-api.js';
 
-/* CNBC is primary; Nasdaq and the daily FX table fill only missing quotes. */
 async function refresh(tickers, context) {
     let quotesBySymbol = new Map();
     let cnbcError = null;
@@ -19,10 +18,18 @@ async function refresh(tickers, context) {
     if (missingTickers.length === 0)
         return quotesBySymbol;
 
-    await runFallbacks(missingTickers, context, quotesBySymbol);
+    const results = await Promise.allSettled([
+        refreshNasdaqQuotes(missingTickers, context),
+        refreshFallbackFxQuotes(missingTickers, context),
+    ]);
+    results.filter(result => result.status === 'fulfilled').forEach(result =>
+        result.value.forEach((quote, storeKey) => quotesBySymbol.set(storeKey, quote)));
 
-    if (quotesBySymbol.size === 0 && cnbcError)
-        throw cnbcError;
+    if (quotesBySymbol.size === 0) {
+        if (cnbcError) throw cnbcError;
+        const failed = results.find(result => result.status === 'rejected');
+        if (failed) throw failed.reason;
+    }
 
     return quotesBySymbol;
 }
@@ -33,12 +40,3 @@ export const restProvider = {
     selectPollTickers: tickers => tickers,
     poll: refresh,
 };
-
-async function runFallbacks(missingTickers, context, quotesBySymbol) {
-    const results = await Promise.allSettled([
-        refreshNasdaqQuotes(missingTickers, context),
-        refreshFallbackFxQuotes(missingTickers, context),
-    ]);
-    results.filter(result => result.status === 'fulfilled').forEach(result =>
-        result.value.forEach((quote, storeKey) => quotesBySymbol.set(storeKey, quote)));
-}

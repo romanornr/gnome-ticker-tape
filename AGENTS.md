@@ -17,7 +17,7 @@ The default ticker list is defined in `utils/settings.js`, and the curated sugge
 - `services/providers/rest-quotes.js`: CNBC-first REST refresh with narrow Nasdaq/FX-rate-table fallbacks for missed symbols
 - `services/providers/cnbc.js`: batched CNBC quote fetching/parsing and FX derivation from USD spot rates
 - `services/providers/cnbc-symbols.js`: catalog-symbol-to-CNBC-grammar mapping (suffix rules, futures/index overrides, FX pair parsing)
-- `services/providers/nasdaq.js`: per-symbol Nasdaq fallback for US listings only (foreign symbols would resolve to differently-priced ADRs)
+- `services/providers/nasdaq.js`: per-symbol Nasdaq fallback for U.S. listings plus NDX (foreign symbols would resolve to differently-priced ADRs)
 - `services/providers/open-er-api.js`: daily USD rate table fallback deriving FX pairs when CNBC's spot vector is unavailable
 - `services/providers/live-websocket-provider.js`: direct live-provider routing plus shared websocket connect/reconnect/watchdog lifecycle
 - `services/providers/kraken-live.js`: Kraken runtime provider with REST polling fallback and websocket protocol handling
@@ -68,7 +68,7 @@ If a key repo file is created, renamed, or deleted, update this `AGENTS.md` file
 
 ## Data And API Conventions
 
-- Non-crypto refreshes use CNBC, with Nasdaq for missed U.S. listings and
+- Non-crypto refreshes use CNBC, with Nasdaq for missed U.S. listings plus NDX and
   open.er-api.com for a missing FX vector. Kraken serves spot crypto;
   Hyperliquid serves perpetual futures.
 - Catalog symbols keep their historical Stooq-style form (`aapl.us`, `700.hk`) because saved user settings contain them; `services/providers/cnbc-symbols.js` owns the translation to CNBC grammar.
