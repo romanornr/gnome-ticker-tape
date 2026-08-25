@@ -1,9 +1,9 @@
 /* Provider quote objects are normalized here so both REST and websocket paths emit the same shape. */
-export function createHyperliquidQuote(entry) {
-    const price = firstPositiveNumber(entry?.ctx?.midPx, entry?.ctx?.markPx);
+export function createHyperliquidQuote(ctx) {
+    const price = firstPositiveNumber(ctx?.midPx, ctx?.markPx);
     if (price === null) return null;
 
-    const previousClose = Number.parseFloat(`${entry?.ctx?.prevDayPx ?? ''}`);
+    const previousClose = Number.parseFloat(`${ctx?.prevDayPx ?? ''}`);
     return {
         price,
         quoteDate: getCurrentUtcDate(),

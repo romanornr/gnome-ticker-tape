@@ -1,6 +1,6 @@
 import {CRYPTO_PROVIDERS} from '../../utils/asset-categories.js';
 import {
-    fetchHyperliquidMarketSnapshots,
+    fetchHyperliquidContexts,
     HYPERLIQUID_WEBSOCKET_URL,
 } from '../../utils/crypto-providers/hyperliquid/catalog.js';
 import {createHyperliquidQuote} from '../../utils/crypto-providers/hyperliquid/quotes.js';
@@ -23,12 +23,11 @@ export class HyperliquidProvider extends LiveWebsocketProvider {
     async poll(tickers, {session}) {
         if (!session || tickers.length === 0) return new Map();
 
-        const markets = await fetchHyperliquidMarketSnapshots(session);
-        const marketsBySymbol = new Map(markets.map(entry => [entry.liveSymbol, entry]));
+        const contexts = await fetchHyperliquidContexts(session);
         const quotesBySymbol = new Map();
 
         tickers.forEach(ticker => {
-            const quote = createHyperliquidQuote(marketsBySymbol.get(ticker.liveSymbol));
+            const quote = createHyperliquidQuote(contexts.get(ticker.liveSymbol));
             if (quote) quotesBySymbol.set(ticker.symbol.toUpperCase(), quote);
         });
 
@@ -49,7 +48,7 @@ export class HyperliquidProvider extends LiveWebsocketProvider {
         const tickerSymbol = this._getSymbolToTickerSymbolMap().get(liveSymbol);
         if (!tickerSymbol) return null;
 
-        const quote = createHyperliquidQuote({ctx: payload.data.ctx});
+        const quote = createHyperliquidQuote(payload.data.ctx);
 
         if (!quote) return null;
 

@@ -50,13 +50,14 @@ async function testSchedulerRecoveryAndQueueing() {
 }
 
 async function testProviderErrorRecovery() {
-    const item = ticker('AAPL', 'aapl.us');
-    const service = new QuotesService('test-uuid', createSettings([item]));
+    const apple = ticker('AAPL', 'aapl.us');
+    const microsoft = ticker('MSFT', 'msft.us');
+    const service = new QuotesService('test-uuid', createSettings([apple, microsoft]));
+    const partial = new Map([['AAPL.US', quote(210)]]);
+    const complete = new Map([['AAPL.US', quote(211)], ['MSFT.US', quote(420)]]);
     const outcomes = [
-        new Error('first'),
-        new Error('duplicate'),
-        new Map([['AAPL.US', quote(210)]]),
-        new Error('after success'),
+        partial, partial, new Error('after partial'),
+        new Error('duplicate'), complete, new Error('after success'),
     ];
     const provider = pollProvider(() => {
         const outcome = outcomes.shift();
@@ -64,22 +65,37 @@ async function testProviderErrorRecovery() {
         return outcome;
     });
     const errors = [];
+    const messages = [];
     const originalLogError = globalThis.logError;
+    const originalLog = globalThis.log;
     globalThis.logError = (error, message) => errors.push(`${message}: ${error.message}`);
+    globalThis.log = message => messages.push(message);
     service._session = {};
     service._scheduler = {requestEntriesUpdate() {}};
+    service._quoteStore.recordPoll([microsoft], new Map([['MSFT.US', quote(419)]]));
 
     try {
-        for (let index = 0; index < 4; index += 1)
-            await service._pollProvider(provider, [item], service._session, service._tickers);
+        await service._pollProvider(provider, [apple, apple, microsoft], service._session, service._tickers);
+        assertDeepEqual([
+            service._quoteStore.getState(apple.symbol).stale,
+            service._quoteStore.getState(microsoft.symbol).stale,
+            service._quoteStore.getState(microsoft.symbol).quote.price,
+        ], [false, true, 419], 'An incomplete poll should preserve and immediately mark only its missing quote stale');
+        while (outcomes.length > 0)
+            await service._pollProvider(provider, [apple, apple, microsoft], service._session, service._tickers);
     } finally {
         globalThis.logError = originalLogError;
+        globalThis.log = originalLog;
     }
 
     assertDeepEqual(errors, [
-        'test-uuid: failed to poll fixture quotes: first',
+        'test-uuid: failed to poll fixture quotes: after partial',
         'test-uuid: failed to poll fixture quotes: after success',
     ], 'A successful poll should reset first-error reporting for the provider');
+    assertDeepEqual(messages, [
+        'test-uuid: incomplete fixture quote poll: returned 1/2; missing MSFT.US',
+        'test-uuid: fixture quote polling recovered',
+    ], 'Provider diagnostics should deduplicate failures and report complete recovery');
 }
 
 async function testLateCompletionAfterStop() {

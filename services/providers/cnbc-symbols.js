@@ -9,6 +9,7 @@ const CNBC_SYMBOL_OVERRIDES = new Map(Object.entries({
     'cc.f': '@CC.1',
     'cl.f': '@CL.1',
     'ct.f': '@CT.1',
+    'dx.f': '.DXY',
     'gc.f': '@GC.1',
     'gf.f': '@FC.1',
     'he.f': '@LH.1',

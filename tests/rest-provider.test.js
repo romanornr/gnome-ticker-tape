@@ -1,10 +1,11 @@
 import GLib from 'gi://GLib';
 
 import {ASSET_CATEGORIES} from '../utils/asset-categories.js';
-import {deriveDxyQuote, deriveFxQuote, parseRestQuoteResponse, refresh as refreshCnbc} from '../services/providers/cnbc.js';
+import {deriveFxQuote, parseRestQuoteResponse, refresh as refreshCnbc} from '../services/providers/cnbc.js';
 import {parseQuoteResponse as parseNasdaqQuote, refresh as refreshNasdaq} from '../services/providers/nasdaq.js';
 import {restProvider} from '../services/providers/rest-quotes.js';
-import {fetchHyperliquidMarketSnapshots} from '../utils/crypto-providers/hyperliquid/catalog.js';
+import {fetchHyperliquidContexts} from '../utils/crypto-providers/hyperliquid/catalog.js';
+import {createHyperliquidQuote} from '../utils/crypto-providers/hyperliquid/quotes.js';
 import {parseKrakenTickerQuotes} from '../utils/crypto-providers/kraken/quotes.js';
 import {httpGetJson} from '../utils/http.js';
 import {assertDeepEqual, assertEqual} from './support/assert.js';
@@ -29,7 +30,7 @@ async function testHttpAndEnvelopeFailures() {
         captureError(() => parseRestQuoteResponse({})),
         captureError(() => parseNasdaqQuote({})),
         captureError(() => parseKrakenTickerQuotes({})),
-        await rejectionMessage(fetchHyperliquidMarketSnapshots(
+        await rejectionMessage(fetchHyperliquidContexts(
             new FakeSession([{status: 200, body: {}}])
         )),
     ], [
@@ -75,6 +76,12 @@ async function testCnbcBatches() {
         {error: new Error('second CNBC batch failed')},
     ])}));
     assertEqual(failure, 'first CNBC batch failed', 'CNBC should throw the first error when no batch yields a quote');
+
+    const dxySession = new FakeSession([{status: 200, body: {FormattedQuoteResult: {FormattedQuote: cnbcQuote('.DXY', '99', '2026-08-25', '-1')}}}]);
+    const dxy = await refreshCnbc([ticker('dx.f', ASSET_CATEGORIES.FX)], {session: dxySession});
+    const dxyUrl = dxySession.requests[0].get_uri().to_string();
+    assertDeepEqual([dxyUrl.includes('symbols=.DXY&'), dxyUrl.includes('EUR='), [...dxy]],
+        [true, false, [['DX.F', quote(99, '20260825', 100)]]], 'DXY should use CNBC direct instead of a synthetic FX basket');
 }
 
 async function testNasdaqFallback() {
@@ -125,15 +132,7 @@ function testSyntheticQuoteDates() {
         ['EUR=', quote(1.2, '20260825', 1.1)],
         ['JPY=', quote(150, '20260823', 149)],
     ]));
-    const dxy = deriveDxyQuote(new Map([
-        ['EUR=', quote(1.2, '20260825', 1.1)],
-        ['JPY=', quote(150, '20260824', 149)],
-        ['GBP=', quote(1.3, '20260822', 1.2)],
-        ['CAD=', quote(1.4, '20260825', 1.3)],
-        ['SEK=', quote(10, '20260825', 9.9)],
-        ['CHF=', quote(0.8, '20260825', 0.79)],
-    ]));
-    assertDeepEqual([fx.quoteDate, dxy.quoteDate], ['20260823', '20260822'], 'Synthetic quotes should use the oldest component date');
+    assertEqual(fx.quoteDate, '20260823', 'Synthetic FX should use its oldest component date');
 }
 
 async function testHyperliquidPerpsOnly() {
@@ -141,17 +140,18 @@ async function testHyperliquidPerpsOnly() {
         {universe: [{name: 'BTC'}, {name: 'OLD', isDelisted: true}]},
         [{midPx: '104321.50'}, {midPx: '1'}],
     ]}]);
-    const markets = await fetchHyperliquidMarketSnapshots(session);
+    const contexts = await fetchHyperliquidContexts(session);
     assertDeepEqual({
         requests: session.requests.length,
-        markets: markets.map(({label, symbol, liveSymbol, quote: quoteCurrency}) =>
-            ({label, symbol, liveSymbol, quote: quoteCurrency})),
+        contexts: [...contexts].map(([symbol, ctx]) => [symbol, ctx.midPx]),
+        quote: createHyperliquidQuote(contexts.get('BTC')).price,
     }, {
         requests: 1,
-        markets: [{label: 'BTC Perp', symbol: 'btc', liveSymbol: 'BTC', quote: 'USD'}],
-    }, 'Hyperliquid discovery should issue one perpetual-market request and exclude delisted markets');
+        contexts: [['BTC', '104321.50']],
+        quote: 104321.5,
+    }, 'Hyperliquid discovery should return raw perpetual contexts and exclude delisted markets');
 
-    assertEqual(await rejectionMessage(fetchHyperliquidMarketSnapshots(new FakeSession([{status: 200, body: [
+    assertEqual(await rejectionMessage(fetchHyperliquidContexts(new FakeSession([{status: 200, body: [
         {universe: [{name: 'BTC'}]}, [],
     ]}]))), 'Hyperliquid returned an invalid market snapshot.',
     'Hyperliquid should reject mismatched universe and context arrays');

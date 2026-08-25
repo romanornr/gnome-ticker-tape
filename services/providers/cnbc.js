@@ -9,18 +9,6 @@ import {
 const CNBC_BATCH_SIZE = 30;
 const CNBC_USER_AGENT = 'ticker-tape-gnome-extension/1.0';
 const CNBC_QUOTE_ENDPOINT = 'https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol';
-const DXY_SAVED_SYMBOL = 'dx.f';
-const DXY_FORMULA = {
-    constant: 50.14348112,
-    legs: [
-        ['EUR=', -0.576],
-        ['JPY=', 0.136],
-        ['GBP=', -0.119],
-        ['CAD=', 0.091],
-        ['SEK=', 0.042],
-        ['CHF=', 0.036],
-    ],
-};
 
 export async function refresh(tickers, {session}) {
     if (!session || tickers.length === 0)
@@ -29,10 +17,10 @@ export async function refresh(tickers, {session}) {
     const {requests, symbols} = buildRequestPlan(tickers);
     const sourceQuotes = await fetchQuotes(session, [...symbols]);
     const quotes = new Map();
-    requests.forEach(({storeKey, cnbcSymbol, fxPair, dxy}) => {
+    requests.forEach(({storeKey, cnbcSymbol, fxPair}) => {
         const quote = cnbcSymbol
             ? sourceQuotes.get(cnbcSymbol)
-            : dxy ? deriveDxyQuote(sourceQuotes) : deriveFxQuote(fxPair, sourceQuotes);
+            : deriveFxQuote(fxPair, sourceQuotes);
         if (quote) quotes.set(storeKey, quote);
     });
     return quotes;
@@ -120,28 +108,6 @@ export function deriveFxQuote({baseCurrency, quoteCurrency}, quotesByCnbcSymbol)
     return {price, quoteDate, previousClose};
 }
 
-/* DXY requires the complete six-currency spot basket. */
-export function deriveDxyQuote(quotesByCnbcSymbol) {
-    const legs = DXY_FORMULA.legs.map(([symbol, exponent]) => [quotesByCnbcSymbol.get(symbol), exponent]);
-    const deriveValue = field => {
-        if (legs.some(([quote]) => !Number.isFinite(quote?.[field]) || quote[field] <= 0))
-            return null;
-
-        const value = legs.reduce(
-            (result, [quote, exponent]) => result * Math.pow(quote[field], exponent), DXY_FORMULA.constant);
-        return Number.isFinite(value) && value > 0 ? value : null;
-    };
-    const price = deriveValue('price');
-    if (price === null)
-        return null;
-
-    const quoteDate = legs.map(([quote]) => quote.quoteDate).filter(Boolean).sort().at(0) ?? '';
-    if (quoteDate === '')
-        return null;
-
-    return {price, quoteDate, previousClose: deriveValue('previousClose')};
-}
-
 function resolveFxLeg(currencyCode, quotesByCnbcSymbol) {
     if (currencyCode === 'USD')
         return {usdPerUnit: 1, previousUsdPerUnit: 1, quoteDate: null};
@@ -168,10 +134,7 @@ function buildRequestPlan(tickers) {
     tickers.forEach(ticker => {
         const storeKey = ticker.symbol.toUpperCase();
         const fxPair = parseFxPairSymbol(ticker.symbol);
-        if (ticker.symbol.trim().toLowerCase() === DXY_SAVED_SYMBOL) {
-            requests.push({storeKey, dxy: true});
-            DXY_FORMULA.legs.forEach(([symbol]) => symbols.add(symbol));
-        } else if (fxPair) {
+        if (fxPair) {
             requests.push({storeKey, fxPair});
             [fxPair.baseCurrency, fxPair.quoteCurrency]
                 .map(buildFxSpotSymbol).filter(Boolean).forEach(symbol => symbols.add(symbol));

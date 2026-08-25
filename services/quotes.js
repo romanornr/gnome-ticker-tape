@@ -30,7 +30,7 @@ export const QuotesService = GObject.registerClass({
         this._settings = settings;
         this._settingsSignalIds = [];
         this._session = null;
-        this._failedProviders = new Set();
+        this._failedProviders = new Map();
         this._tickers = loadTickerConfigs(this._settings);
         this._refreshIntervalSeconds = loadRefreshIntervalSeconds(this._settings);
         this._entries = createLoadingEntries(this._tickers);
@@ -133,15 +133,26 @@ export const QuotesService = GObject.registerClass({
             if (this._session !== session || this._tickers !== configuration)
                 return;
 
-            this._failedProviders.delete(provider);
+            const requestedSymbols = [...new Set(tickers.map(ticker => ticker.symbol.toUpperCase()))];
+            const missingSymbols = requestedSymbols.filter(symbol => !quotesBySymbol.has(symbol));
+            if (missingSymbols.length > 0) {
+                if (!this._failedProviders.has(provider)) {
+                    this._failedProviders.set(provider, 'incomplete');
+                    const returnedCount = requestedSymbols.length - missingSymbols.length;
+                    log(`${this._uuid}: incomplete ${provider.id} quote poll: ` +
+                        `returned ${returnedCount}/${requestedSymbols.length}; missing ${missingSymbols.join(', ')}`);
+                }
+            } else if (this._failedProviders.delete(provider)) {
+                log(`${this._uuid}: ${provider.id} quote polling recovered`);
+            }
             this._quoteStore.recordPoll(tickers, quotesBySymbol);
         } catch (error) {
             if (this._session !== session || this._tickers !== configuration)
                 return;
 
             this._quoteStore.markStale(tickers);
-            if (!this._failedProviders.has(provider)) {
-                this._failedProviders.add(provider);
+            if (this._failedProviders.get(provider) !== 'error') {
+                this._failedProviders.set(provider, 'error');
                 logError(error, `${this._uuid}: failed to poll ${provider.id} quotes`);
             }
         }

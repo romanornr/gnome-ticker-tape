@@ -20,8 +20,8 @@ export function loadHyperliquidMarkets() {
     return cachedHyperliquidMarketsPromise;
 }
 
-export async function fetchHyperliquidMarketSnapshots(session) {
-    return buildHyperliquidPerpEntries(
+export async function fetchHyperliquidContexts(session) {
+    return parseHyperliquidContexts(
         await httpPostJson(session, HYPERLIQUID_API_URL, {type: 'metaAndAssetCtxs'})
     );
 }
@@ -30,30 +30,30 @@ async function _fetchHyperliquidMarkets() {
     const session = new Soup.Session();
 
     try {
-        return (await fetchHyperliquidMarketSnapshots(session))
+        return [...await fetchHyperliquidContexts(session)]
+            .map(([liveSymbol, ctx]) => createHyperliquidPerpCatalogEntry(liveSymbol, ctx))
             .sort((left, right) => left.label.localeCompare(right.label));
     } finally {
         session.abort();
     }
 }
 
-function buildHyperliquidPerpEntries(response) {
+function parseHyperliquidContexts(response) {
     if (!Array.isArray(response) || response.length !== 2 ||
         !Array.isArray(response[0]?.universe) || !Array.isArray(response[1]) ||
         response[0].universe.length !== response[1].length)
         throw new Error('Hyperliquid returned an invalid market snapshot.');
 
     const [meta, contexts] = response;
-
-    return meta.universe
-        .map((market, index) => createHyperliquidPerpCatalogEntry(market, contexts[index]))
-        .filter(entry => entry !== null);
+    return new Map(meta.universe.flatMap((market, index) => {
+        const liveSymbol = normalizeHyperliquidLiveSymbol(market?.name);
+        return liveSymbol === '' || market?.isDelisted === true
+            ? []
+            : [[liveSymbol, contexts[index]]];
+    }));
 }
 
-function createHyperliquidPerpCatalogEntry(market, ctx) {
-    const liveSymbol = normalizeHyperliquidLiveSymbol(market?.name);
-    if (liveSymbol === '' || market?.isDelisted === true) return null;
-
+function createHyperliquidPerpCatalogEntry(liveSymbol, ctx) {
     return {
         assetCategory: ASSET_CATEGORIES.CRYPTO,
         cryptoProvider: CRYPTO_PROVIDERS.HYPERLIQUID,
@@ -64,7 +64,6 @@ function createHyperliquidPerpCatalogEntry(market, ctx) {
         keywords: [liveSymbol, 'perp', 'perpetual'],
         base: liveSymbol,
         quote: 'USD',
-        ctx,
     };
 }
 
