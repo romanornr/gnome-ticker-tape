@@ -114,8 +114,9 @@ between entries and the polling interval. The default interval is five minutes.
 - `services/` owns Shell-runtime quote state, scheduling, and entry updates.
 - `utils/` owns generic support, preferences helpers, and curated catalogs.
 
-Shell UI and preferences run in separate processes. Provider and utility modules
-must not import either process's UI libraries.
+Shell UI and preferences run in separate processes. Process-neutral provider and
+utility modules must not import either process's UI libraries. Modules under
+`utils/prefs/` may import GTK or Adwaita, but must never import Shell UI libraries.
 
 ## Edit The Curated Catalog
 

@@ -16,6 +16,7 @@ The default ticker list is defined in `utils/settings.js`, and the curated sugge
 - `services/quote-update-scheduler.js`: refresh timer, throttled entry rebuilds, price-flash reset, and network recovery for `QuotesService`
 - `providers/market-quotes.js`: CNBC-first market refresh with narrow Nasdaq and FX-rate-table fallbacks
 - `providers/http.js`: shared Soup transport with one timeout policy and request headers
+- `providers/websocket.js`: shared Soup WebSocket connection and close helpers
 - `providers/cnbc/quotes.js`: batched CNBC parsing and FX derivation from USD spot rates
 - `providers/cnbc/symbols.js`: catalog-symbol-to-CNBC grammar mapping, including direct DXY
 - `providers/nasdaq.js`: fallback for U.S. listings plus NDX; foreign symbols could resolve to differently-priced ADRs

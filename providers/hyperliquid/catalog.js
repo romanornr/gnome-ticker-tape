@@ -10,20 +10,16 @@ export const HYPERLIQUID_WEBSOCKET_URL = 'wss://api.hyperliquid.xyz/ws';
 let cachedHyperliquidMarketsPromise = null;
 
 export function loadHyperliquidMarkets() {
-    if (!cachedHyperliquidMarketsPromise) {
-        cachedHyperliquidMarketsPromise = _fetchHyperliquidMarkets().catch(error => {
-            cachedHyperliquidMarketsPromise = null;
-            throw error;
-        });
-    }
+    cachedHyperliquidMarketsPromise ??= _fetchHyperliquidMarkets().catch(error => {
+        cachedHyperliquidMarketsPromise = null;
+        throw error;
+    });
 
     return cachedHyperliquidMarketsPromise;
 }
 
 export async function fetchHyperliquidContexts(session) {
-    return parseHyperliquidContexts(
-        await httpPostJson(session, HYPERLIQUID_API_URL, {type: 'metaAndAssetCtxs'})
-    );
+    return parseHyperliquidContexts(await httpPostJson(session, HYPERLIQUID_API_URL, {type: 'metaAndAssetCtxs'}));
 }
 
 async function _fetchHyperliquidMarkets() {
@@ -72,5 +68,5 @@ function deriveHyperliquidPriceDecimals(ctx) {
     if (priceText === '') return 2;
 
     const [, decimals = ''] = priceText.split('.');
-    return Math.min(6, Math.max(0, decimals.length));
+    return Math.min(6, decimals.length);
 }

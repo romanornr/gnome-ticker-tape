@@ -34,6 +34,11 @@ export async function runTests() {
     fallbacks.push(fallbackSymbols());
     socket.emitText({
         channel: 'ticker',
+        data: [{symbol: 'BTC/USD', last: '104321.5', timestamp: 1787659200}],
+    });
+    fallbacks.push(fallbackSymbols());
+    socket.emitText({
+        channel: 'ticker',
         data: [{symbol: 'BTC/USD', last: '0', timestamp: '2026-08-25T12:00:00Z'}],
     });
     fallbacks.push(fallbackSymbols());
@@ -54,7 +59,7 @@ export async function runTests() {
         update: updates.map(batch => batch.map(([symbol, quote]) =>
             [symbol, quote.price, quote.previousClose])),
     }, {
-        fallbacks: [['btcusd'], ['btcusd'], ['btcusd'], []],
+        fallbacks: [['btcusd'], ['btcusd'], ['btcusd'], ['btcusd'], []],
         subscription: ['BTC/USD'],
         update: [[['BTCUSD', 104321.5, 104421.5]]],
     }, 'WebSocket readiness should require a valid quote, not connection or acknowledgement');

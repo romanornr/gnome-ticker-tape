@@ -3,6 +3,7 @@ import Soup from 'gi://Soup?version=3.0';
 
 import {ASSET_CATEGORIES, CRYPTO_PROVIDERS} from '../../utils/asset-categories.js';
 import {normalizeKrakenLiveSymbol, normalizeKrakenTickerSymbol} from './symbols.js';
+import {closeWebsocket, openWebsocket} from '../websocket.js';
 
 export const KRAKEN_WEBSOCKET_URL = 'wss://ws.kraken.com/v2';
 
@@ -13,12 +14,10 @@ const KRAKEN_QUOTE_PRIORITY = ['USD', 'EUR', 'USDT', 'USDC', 'BTC', 'ETH'];
 let cachedKrakenSpotPairsPromise = null;
 
 export function loadKrakenSpotPairs() {
-    if (!cachedKrakenSpotPairsPromise) {
-        cachedKrakenSpotPairsPromise = _fetchKrakenSpotPairs().catch(error => {
-            cachedKrakenSpotPairsPromise = null;
-            throw error;
-        });
-    }
+    cachedKrakenSpotPairsPromise ??= _fetchKrakenSpotPairs().catch(error => {
+        cachedKrakenSpotPairsPromise = null;
+        throw error;
+    });
 
     return cachedKrakenSpotPairsPromise;
 }
@@ -48,7 +47,7 @@ async function _fetchKrakenSpotPairs() {
     const session = new Soup.Session();
 
     try {
-        const websocket = await openInstrumentWebsocket(session);
+        const websocket = await openWebsocket(session, KRAKEN_WEBSOCKET_URL);
         websocket.set_max_incoming_payload_size(KRAKEN_INSTRUMENT_MAX_INCOMING_PAYLOAD_SIZE);
 
         try {
@@ -63,19 +62,6 @@ async function _fetchKrakenSpotPairs() {
     } finally {
         session.abort();
     }
-}
-
-function openInstrumentWebsocket(session) {
-    const message = Soup.Message.new('GET', KRAKEN_WEBSOCKET_URL);
-    return new Promise((resolve, reject) => {
-        session.websocket_connect_async(message, null, [], GLib.PRIORITY_DEFAULT, null, (_session, result) => {
-            try {
-                resolve(session.websocket_connect_finish(result));
-            } catch (error) {
-                reject(error);
-            }
-        });
-    });
 }
 
 async function readInstrumentPairs(websocket) {
@@ -125,12 +111,6 @@ async function readInstrumentPairs(websocket) {
             GLib.Source.remove(timeoutId);
         signalIds.forEach(signalId => websocket.disconnect(signalId));
     }
-}
-
-function closeWebsocket(websocket) {
-    const state = websocket.get_state();
-    if (state !== Soup.WebsocketState.CLOSING && state !== Soup.WebsocketState.CLOSED)
-        websocket.close(1000, null);
 }
 
 /* Price precision is normalized into the extension's bounded decimals range here. */

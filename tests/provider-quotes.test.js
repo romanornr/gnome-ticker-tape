@@ -117,6 +117,14 @@ async function testRestComposition() {
         ticker('uso.us', ASSET_CATEGORIES.COMMODITY), ticker('^ndq'), ticker('eurusd', ASSET_CATEGORIES.FX),
     ], {session});
     assertDeepEqual([...recovered.keys()].sort(), ['EURUSD', 'USO.US', '^NDQ'], 'REST should combine all fallback results');
+    const invalidFxTime = await rejectionMessage(marketQuotesProvider.poll([
+        ticker('eurusd', ASSET_CATEGORIES.FX),
+    ], {session: new FakeSession([
+        {status: 200, body: {FormattedQuoteResult: {FormattedQuote: []}}},
+        {status: 200, body: {result: 'success', time_last_update_unix: 8_640_000_000_001, rates: {USD: 1, EUR: 0.8}}},
+    ])}));
+    assertEqual(invalidFxTime, 'Fallback FX provider returned an invalid update time.',
+        'Fallback FX should reject an out-of-range update time through its provider error');
     const cnbcFailure = await rejectionMessage(marketQuotesProvider.poll([ticker('a.us')], {session: new FakeSession([
         {error: new Error('CNBC failed')}, {error: new Error('Nasdaq failed')},
     ])}));

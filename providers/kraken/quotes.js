@@ -1,18 +1,3 @@
-import {httpGetJson} from '../http.js';
-
-const KRAKEN_REST_TICKER_URL = 'https://api.kraken.com/0/public/Ticker';
-
-function buildKrakenTickerUrl(liveSymbols) {
-    return `${KRAKEN_REST_TICKER_URL}?pair=${liveSymbols.map(encodeURIComponent).join(',')}`;
-}
-
-export async function fetchKrakenTickerQuotes(session, liveSymbols) {
-    if (liveSymbols.length === 0) return new Map();
-
-    const payload = await httpGetJson(session, buildKrakenTickerUrl(liveSymbols));
-    return parseKrakenTickerQuotes(payload);
-}
-
 /*
  * REST ticker rows are normalized into the same quote shape as websocket
  * updates. REST has no per-quote timestamp, so the fetch time stands in, and
@@ -73,6 +58,8 @@ function deriveKrakenPreviousClose(price, change, changePct) {
 }
 
 function normalizeKrakenTimestampDate(timestampText) {
+    if (typeof timestampText !== 'string') return '';
+
     const normalized = timestampText.slice(0, 10).replaceAll('-', '');
     return /^\d{8}$/.test(normalized) ? normalized : '';
 }

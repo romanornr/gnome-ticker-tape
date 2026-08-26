@@ -3,23 +3,11 @@ import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
 import {isLiveCryptoTicker} from '../utils/asset-categories.js';
+import {closeWebsocket, openWebsocket} from './websocket.js';
 
 const LIVE_CRYPTO_RECONNECT_DELAYS_SECONDS = [2, 5, 10, 20, 30, 60];
 const LIVE_SILENCE_TIMEOUT_SECONDS = 60;
 const LIVE_WATCHDOG_INTERVAL_SECONDS = 15;
-
-function openWebsocketConnection(session, websocketUrl, cancellable) {
-    const message = Soup.Message.new('GET', websocketUrl);
-    return new Promise((resolve, reject) => {
-        session.websocket_connect_async(message, null, [], GLib.PRIORITY_DEFAULT, cancellable, (_session, result) => {
-            try {
-                resolve(session.websocket_connect_finish(result));
-            } catch (error) {
-                reject(error);
-            }
-        });
-    });
-}
 
 export class LiveWebsocketProvider {
     constructor({
@@ -29,7 +17,7 @@ export class LiveWebsocketProvider {
         uuid,
         onQuotes,
         onStale,
-        connectWebsocket = openWebsocketConnection,
+        connectWebsocket = openWebsocket,
     }) {
         this.id = id;
         this._name = name;
@@ -288,12 +276,6 @@ export class LiveWebsocketProvider {
 
 function createSymbolSignature(symbols) {
     return [...symbols].sort().join('|');
-}
-
-function closeWebsocket(websocket) {
-    const state = websocket.get_state();
-    if (state !== Soup.WebsocketState.CLOSING && state !== Soup.WebsocketState.CLOSED)
-        websocket.close(1000, null);
 }
 
 function removeTimeout(sourceId) {

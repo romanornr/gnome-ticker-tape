@@ -1,10 +1,10 @@
 import {CRYPTO_PROVIDERS} from '../../utils/asset-categories.js';
 import {KRAKEN_WEBSOCKET_URL} from './catalog.js';
-import {
-    createKrakenQuote,
-    fetchKrakenTickerQuotes,
-} from './quotes.js';
+import {createKrakenQuote, parseKrakenTickerQuotes} from './quotes.js';
+import {httpGetJson} from '../http.js';
 import {LiveWebsocketProvider} from '../live-websocket-provider.js';
+
+const KRAKEN_REST_TICKER_URL = 'https://api.kraken.com/0/public/Ticker';
 
 /*
  * KrakenProvider owns polling and websocket protocol messages.
@@ -25,8 +25,9 @@ export class KrakenProvider extends LiveWebsocketProvider {
     async poll(tickers, {session}) {
         if (!session || tickers.length === 0) return new Map();
 
-        const quotesByPair = await fetchKrakenTickerQuotes(
-            session, [...new Set(tickers.map(ticker => ticker.liveSymbol))]);
+        const liveSymbols = [...new Set(tickers.map(ticker => ticker.liveSymbol))];
+        const url = `${KRAKEN_REST_TICKER_URL}?pair=${liveSymbols.map(encodeURIComponent).join(',')}`;
+        const quotesByPair = parseKrakenTickerQuotes(await httpGetJson(session, url));
         const quotesBySymbol = new Map();
 
         tickers.forEach(ticker => {

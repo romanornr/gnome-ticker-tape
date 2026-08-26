@@ -59,5 +59,9 @@ function normalizeUpdateTimestamp(unixSeconds) {
     if (!Number.isFinite(unixSeconds) || unixSeconds <= 0)
         return '';
 
-    return new Date(unixSeconds * 1000).toISOString().slice(0, 10).replaceAll('-', '');
+    const updateDate = new Date(unixSeconds * 1000);
+    if (!Number.isFinite(updateDate.getTime()))
+        return '';
+
+    return updateDate.toISOString().slice(0, 10).replaceAll('-', '');
 }
